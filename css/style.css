@@ -431,9 +431,6 @@ button.chip { min-height: 32px; }
 }
 .task.status-done { border-left-color: var(--good); }
 .task.status-partial { border-left-color: var(--warn-text); }
-.task.status-carried { border-left-color: var(--muted); background: color-mix(in srgb, var(--surface) 92%, var(--muted)); }
-.task.status-carried [data-tf=place], .task.status-carried [data-tf=work] { color: var(--muted); }
-.task-status button[data-status=carried][aria-pressed="true"] { background: var(--muted); border-color: var(--muted); color: var(--surface); }
 .task.status-none { border-left-color: var(--danger); border-left-style: dashed; }
 .task-hint { margin: 0; font-size: 0.78rem; color: var(--danger); }
 .task.plan { border-left-color: var(--primary); }
@@ -485,7 +482,6 @@ button.chip { min-height: 32px; }
 .todo-box { flex: 0 0 18px; height: 18px; border: 2px solid var(--muted); border-radius: 4px; margin-top: 2px; }
 .pill.st-done { background: color-mix(in srgb, var(--good) 18%, var(--surface)); color: var(--good); }
 .pill.st-partial { background: var(--warn-bg); color: var(--warn-text); }
-.pill.st-carried { background: var(--bg); color: var(--muted); border: 1px solid var(--muted); }
 
 .events { list-style: none; padding: 0; margin: 0 0 8px; display: flex; flex-direction: column; gap: 6px; }
 .events li { display: grid; grid-template-columns: 5.5em 1fr auto; gap: 8px; align-items: center; }

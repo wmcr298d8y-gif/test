@@ -378,13 +378,14 @@
 
   // ---------- 日報 ----------
   // 1 日・1 現場で 1 件。代わりの人が読んでも「今日は何をどこまでやるか」が分かることを目的にする。
-  // 今日の作業は前日の「明日の予定」から下書きし、途中・繰越の作業は翌日の予定へ自動で入れる。
+  // 今日の作業は前日の「明日の予定」から下書きし、途中の作業は翌日の予定へ自動で入れる（繰越）。
 
   const WEATHERS = ['晴', '曇', '雨', '雪'];
-  // 今日の作業の状態。前日の予定から入った作業は未選択（''）で始まり、完了・途中・繰越のどれかを選ぶ。
-  // 繰越 = 予定していたがこの日はやらなかった作業。今日の記録に残したまま、明日の予定へ入れる
-  const TASK_STATUS = { done: '完了', partial: '途中', carried: '繰越' };
-  const CARRY_STATUSES = new Set(['partial', 'carried']);
+  // 今日の作業の状態。前日の予定から入った作業は未選択（''）で始まり、完了か途中を選ぶ。
+  // 途中 = 今日で終わらなかった作業（手を付けられなかった作業も含む。理由は備考に書く）。
+  // 今日の記録に残したまま、明日の予定へ「繰越」として入れる
+  const TASK_STATUS = { done: '完了', partial: '途中' };
+  const CARRY_STATUSES = new Set(['partial']);
 
   /** 現場ノートの項目（現場ごとに 1 枚。代わりの人が最初に読む情報） */
   const NOTEBOOK_FIELDS = [
@@ -397,14 +398,14 @@
   ];
 
   function normalizeTask(t) {
-    // 旧バージョンの「未着手」は「繰越」として扱う
-    const status = t.status === 'notyet' ? 'carried' : (t.status in TASK_STATUS ? t.status : '');
-    // skipCarry: 途中・繰越でも明日の予定には入れない（利用者が予定から外した）
+    // 旧バージョンの「未着手」「繰越」は「途中」として扱う
+    const status = t.status === 'notyet' || t.status === 'carried' ? 'partial' : (t.status in TASK_STATUS ? t.status : '');
+    // skipCarry: 途中でも明日の予定には入れない（利用者が予定から外した）
     // prevMemo: 下書きで表示する前回の進み具合（参考表示のみで保存しない）
     return { id: t.id || newId(), place: t.place || '', work: t.work || '', workTypeId: t.workTypeId || '', status, memo: t.memo || '', skipCarry: !!t.skipCarry, prevMemo: t.prevMemo || '' };
   }
 
-  /** 明日の予定。fromTaskId: 今日の途中・繰越の作業から自動で入れた予定、carried: 繰越の作業から入れた予定 */
+  /** 明日の予定。fromTaskId: 今日の途中の作業から自動で入れた予定（繰越）。carried は旧バージョンの項目 */
   function normalizePlan(p) {
     return { id: p.id || newId(), place: p.place || '', work: p.work || '', workTypeId: p.workTypeId || '', fromTaskId: p.fromTaskId || '', carried: !!p.carried };
   }
@@ -467,7 +468,7 @@
 
   /**
    * 日報の下書き。保存済みならその内容、なければ同じ現場の直近の日報から作る。
-   *   今日の作業 = 前回の「明日の予定」＋ 前回「途中・繰越」で予定に入っていなかった作業（どちらも状態は未選択）
+   *   今日の作業 = 前回の「明日の予定」＋ 前回「途中」で予定に入っていなかった作業（どちらも状態は未選択）
    *   出面 = 前回と同じ人数（変わっていれば直してもらう）
    * 戻り値: { report, saved: 保存済みか, fromDate: 下書きの元にした日報の日付 }
    */
@@ -479,7 +480,7 @@
     if (!prev) return { report, saved: false, fromDate: null };
     const seen = new Set();
     const tasks = [];
-    // 前回「途中・繰越」だった作業の進み具合・繰越の理由は、参考として下書きに表示する（入力欄には入れない）
+    // 前回「途中」だった作業の進み具合・できなかった理由は、参考として下書きに表示する（入力欄には入れない）
     const prevMemo = new Map(prev.tasks.filter((t) => t.status !== 'done' && t.memo).map((t) => [itemKey(t), t.memo]));
     for (const p of prev.tomorrow) {
       const key = itemKey(p);
@@ -498,7 +499,7 @@
   }
 
   /**
-   * 途中・繰越の作業を「明日の予定」に自動で入れる（すでに同じ作業があれば入れない）。
+   * 途中の作業を「明日の予定」に自動で入れる（すでに同じ作業があれば入れない）。
    * 完了にした・消した作業から自動で入れた予定は外す。手で書いた予定には触れない。
    */
   function syncCarryOver(report) {
@@ -514,11 +515,11 @@
       const linked = report.tomorrow.find((p) => p.fromTaskId === t.id);
       if (linked) {
         // 作業の内容や状態を直したら、自動で入れた予定も合わせる
-        Object.assign(linked, { place: t.place, work: t.work, workTypeId: t.workTypeId, carried: t.status === 'carried' });
+        Object.assign(linked, { place: t.place, work: t.work, workTypeId: t.workTypeId });
         continue;
       }
       if (keys.has(itemKey(t))) continue;
-      report.tomorrow.push(normalizePlan({ place: t.place, work: t.work, workTypeId: t.workTypeId, fromTaskId: t.id, carried: t.status === 'carried' }));
+      report.tomorrow.push(normalizePlan({ place: t.place, work: t.work, workTypeId: t.workTypeId, fromTaskId: t.id }));
       keys.add(itemKey(t));
     }
     return report;
@@ -533,7 +534,7 @@
     const r = cleanReport(report);
     if (!r.tasks.length && !r.notes) errors.push('今日の作業を 1 つ以上入力してください（作業がない日は特記事項に理由を書いてください）');
     const unset = r.tasks.filter((t) => !t.status);
-    if (unset.length) errors.push(`状態を選んでいない作業が ${unset.length} 件あります。完了・途中・繰越のどれかを選んでください（今日やらなかった作業は「繰越」）`);
+    if (unset.length) errors.push(`状態を選んでいない作業が ${unset.length} 件あります。完了か途中を選んでください（手を付けられなかった作業は「途中」にして理由を備考へ）`);
     if (r.crew.own < 0 || r.crew.subs.some((x) => x.people < 0)) errors.push('出面は 0 以上にしてください');
     if (r.crew.subs.some((x) => !x.name)) errors.push('協力会社の名前を入力してください');
     return errors;

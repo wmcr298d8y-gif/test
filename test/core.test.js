@@ -502,7 +502,7 @@ test('日報の下書き: 前回の「明日の予定」＋途中・未着手の
     tasks: [
       { place: '2F 西側', work: '配管', status: 'done' },
       { place: '3F', work: '分電盤 据付', status: 'partial', memo: '1面残り' },
-      { place: '1F', work: 'ボックス取付', status: 'notyet' }, // 旧データの未着手 → 繰越として扱う
+      { place: '1F', work: 'ボックス取付', status: 'notyet' }, // 旧データの未着手 → 途中として扱う
     ],
     tomorrow: [
       { place: '3F', work: '分電盤 据付' },   // 途中の作業と同じ → 重複させない
@@ -618,46 +618,40 @@ test('出面は人工（0.5 刻みなど小数）で合計できる', () => {
   assert.equal(Core.crewTotal(null), 0);
 });
 
-test('繰越: 今日の作業に「繰越」として残し、明日の予定にも自動で入れる', () => {
+test('途中: 今日の作業に残したまま、明日の予定へ「繰越」として自動で入れる', () => {
   const r = Core.normalizeReport({
     tasks: [
-      { id: 'a', place: '2F', work: '配管', status: 'carried', memo: '資材未着' },
-      { id: 'b', place: '3F', work: '盤', status: 'partial' },
-      { id: 'c', place: '1F', work: '器具搬入', status: 'carried' },
+      { id: 'a', place: '2F', work: '配管', status: 'partial', memo: '資材未着のため未着手' },
+      { id: 'b', place: '3F', work: '盤', status: 'partial', memo: '2面のうち1面済み' },
+      { id: 'c', place: '1F', work: '器具搬入', status: 'partial' },
       { id: 'd', place: '1F', work: '完了した作業', status: 'done' },
     ],
     tomorrow: [{ id: 'm', place: '1F', work: '器具搬入' }], // 手で書いた予定と同じ作業は二重にしない
   });
   Core.syncCarryOver(r);
   assert.equal(r.tasks.length, 4); // 今日の作業からは消えない
-  assert.deepEqual(r.tomorrow.map((p) => [p.work, p.carried, !!p.fromTaskId]), [
-    ['器具搬入', false, false], ['配管', true, true], ['盤', false, true],
-  ]);
-  // 途中 → 繰越に変えると、予定の「繰越」の印も変わる
-  r.tasks[1].status = 'carried';
-  Core.syncCarryOver(r);
-  assert.equal(r.tomorrow.find((p) => p.work === '盤').carried, true);
-  // 繰越 → 完了に変えると予定から外れる
+  assert.deepEqual(r.tomorrow.map((p) => [p.work, !!p.fromTaskId]), [['器具搬入', false], ['配管', true], ['盤', true]]);
+  // 完了に変えると予定から外れる
   r.tasks[0].status = 'done';
   Core.syncCarryOver(r);
   assert.deepEqual(r.tomorrow.map((p) => p.work), ['器具搬入', '盤']);
-  // 保存しても今日の作業に「繰越」として残る
+  // 保存しても今日の作業に「途中」として残り、翌日の下書きに入る
   const s = reportState();
-  const rep = { ...r, date: '2026-09-25', siteId: 's1' };
-  assert.deepEqual(Core.saveReport(s, rep).errors, []);
-  assert.deepEqual(Core.findReport(s, '2026-09-25', 's1').tasks.map((t) => t.status), ['done', 'carried', 'carried', 'done']);
-  // 翌日の下書き: 繰越・途中の作業が入り、繰越の理由は「前回」として参考表示
+  assert.deepEqual(Core.saveReport(s, { ...r, date: '2026-09-25', siteId: 's1' }).errors, []);
+  assert.deepEqual(Core.findReport(s, '2026-09-25', 's1').tasks.map((t) => t.status), ['done', 'partial', 'partial', 'done']);
   const d = Core.draftReport(s, '2026-09-26', 's1');
-  assert.deepEqual(d.report.tasks.map((t) => t.work), ['器具搬入', '盤']);
-  assert.ok(d.report.tasks.every((t) => t.status === ''));
+  assert.deepEqual(d.report.tasks.map((t) => [t.work, t.status, t.prevMemo]), [['器具搬入', '', ''], ['盤', '', '2面のうち1面済み']]);
+});
+
+test('旧データの「未着手」「繰越」は「途中」として読み込む', () => {
+  const r = Core.normalizeReport({ tasks: [{ work: 'a', status: 'notyet' }, { work: 'b', status: 'carried' }, { work: 'c', status: 'done' }] });
+  assert.deepEqual(r.tasks.map((t) => t.status), ['partial', 'partial', 'done']);
 });
 
 test('validateReport: 状態を選んでいない作業があると保存できない', () => {
   const s = reportState();
   const r = Core.normalizeReport({ date: '2026-09-25', siteId: 's1', tasks: [{ place: '2F', work: '配管', status: '' }, { place: '3F', work: '盤', status: 'done' }] });
   assert.ok(Core.validateReport(s, r).some((e) => /状態を選んでいない作業が 1 件/.test(e)));
-  r.tasks[0].status = 'carried';
-  assert.deepEqual(Core.validateReport(s, r), []);
   r.tasks[0].status = 'partial';
   assert.deepEqual(Core.validateReport(s, r), []);
 });
