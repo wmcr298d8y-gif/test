@@ -35,97 +35,32 @@
         </div>
       </div>
       <form id="entry-form" novalidate>
-        <input type="hidden" name="id">
-        <div class="field">
-          <label for="f-date">日付</label>
-          <input id="f-date" type="date" name="date" required>
-        </div>
-        <div class="field">
-          <label for="f-site">現場</label>
-          <select id="f-site" name="siteId" required></select>
-        </div>
-        <div class="field">
-          <label for="f-category">工種（大分類）</label>
-          <select id="f-category" name="categoryId" required></select>
-        </div>
-        <div class="field">
-          <label for="f-worktype">工種（小分類）</label>
-          <select id="f-worktype" name="workTypeId" required></select>
-        </div>
-        <div class="field">
-          <label for="f-worker">作業者・業者 <span class="optional">任意</span></label>
-          <input id="f-worker" type="text" name="worker" list="worker-list" autocomplete="off" placeholder="例: 山田 / ○○工業">
-          <datalist id="worker-list"></datalist>
-        </div>
-
-        <div class="field">
-          <span class="label">時間の入力方法</span>
-          <div class="segmented">
-            <label><input type="radio" name="mode" value="hours" checked> 時間で入力</label>
-            <label><input type="radio" name="mode" value="range"> 開始・終了で入力</label>
-          </div>
-        </div>
-
-        <div class="row" id="range-fields" hidden>
+        <div class="sheet-head">
           <div class="field">
-            <label for="f-start">開始</label>
-            <input id="f-start" type="time" name="start" value="08:00">
+            <label for="f-date">日付</label>
+            <input id="f-date" type="date" name="date" required>
           </div>
           <div class="field">
-            <label for="f-end">終了</label>
-            <input id="f-end" type="time" name="end" value="17:00">
-          </div>
-          <div class="field">
-            <label for="f-break">休憩(分)</label>
-            <input id="f-break" type="number" name="breakMinutes" min="0" step="5" value="60" inputmode="numeric">
+            <label for="f-site">現場</label>
+            <select id="f-site" name="siteId" required></select>
           </div>
         </div>
+        <div class="day-sites" id="day-sites"></div>
 
-        <div class="row">
-          <div class="field">
-            <label for="f-hours">時間(h/人)</label>
-            <input id="f-hours" type="number" name="hours" min="0.25" max="24" step="0.25" value="8" inputmode="decimal" required>
-            <div class="quick" id="quick-hours">
-              <button type="button" data-h="1">1</button>
-              <button type="button" data-h="2">2</button>
-              <button type="button" data-h="4">4</button>
-              <button type="button" data-h="8">8</button>
-            </div>
-          </div>
-          <div class="field">
-            <label for="f-people">人数</label>
-            <input id="f-people" type="number" name="people" min="1" step="1" value="1" inputmode="numeric" required>
-            <div class="quick">
-              <button type="button" data-step="-1">−</button>
-              <button type="button" data-step="1">＋</button>
-            </div>
-          </div>
+        <div class="sheet-rows" id="sheet-rows"></div>
+
+        <div class="sheet-tools">
+          <button type="button" class="add-row" id="add-row">＋ 作業を追加</button>
+          <button type="button" id="load-prev">前回の作業を呼び出す</button>
         </div>
-
-        <div class="field">
-          <label for="f-quantity">数量（出来高） <span class="optional">任意・歩掛り算出に使用</span></label>
-          <div class="with-unit">
-            <input id="f-quantity" type="number" name="quantity" min="0" step="any" inputmode="decimal" placeholder="この作業で施工した量">
-            <span class="unit" id="f-unit"></span>
-          </div>
-        </div>
-
-        <div class="field">
-          <label for="f-note">備考 <span class="optional">任意</span></label>
-          <textarea id="f-note" name="note" rows="2" placeholder="作業内容・場所など"></textarea>
-        </div>
-
-        <p class="calc" id="calc-preview"></p>
+        <datalist id="worker-list"></datalist>
         <ul class="errors" id="form-errors"></ul>
 
-        <div class="actions">
-          <button type="submit" class="primary" id="submit-btn">記録する</button>
-          <button type="button" id="cancel-edit" hidden>編集をやめる</button>
+        <div class="sheet-bar">
+          <div class="sheet-total" id="sheet-total"></div>
+          <button type="submit" class="primary" id="save-sheet">保存</button>
         </div>
       </form>
-
-      <h2>この日の記録</h2>
-      <div id="today-list"></div>
     </section>
 
     <!-- 一覧 -->

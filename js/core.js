@@ -158,6 +158,85 @@
     return errors;
   }
 
+  // ---------- 日報（1 日・1 現場分の作業をまとめて入力） ----------
+
+  /** 何も入力していない行（保存時に読み飛ばす） */
+  function isEmptyRow(row) {
+    return !row.workTypeId && isBlank(row.quantity) && isBlank(row.note) && isBlank(row.worker);
+  }
+
+  /** 指定日・現場の記録を日報の並び順で返す */
+  function dayEntries(state, date, siteId) {
+    const orderOf = (e) => (Number.isFinite(e.order) ? e.order : Infinity);
+    return state.entries
+      .filter((e) => e.date === date && e.siteId === siteId)
+      .sort((a, b) => orderOf(a) - orderOf(b) || (a.createdAt || 0) - (b.createdAt || 0));
+  }
+
+  /**
+   * 日報をまとめて保存する。rows は画面の作業行（id があれば既存の記録）。
+   * 日報から消した行の記録は削除する。1 行でもエラーがあれば何も変更しない。
+   * 戻り値: { errors, saved, added, removed }
+   */
+  function saveDaySheet(state, date, siteId, rows, now = Date.now()) {
+    const existing = new Map(dayEntries(state, date, siteId).map((e) => [e.id, e]));
+    const errors = [];
+    const entries = [];
+    rows.forEach((r, i) => {
+      if (isEmptyRow(r)) return;
+      const prev = existing.get(r.id);
+      const entry = {
+        ...(prev || { createdAt: now + i }),
+        id: prev ? prev.id : newId(),
+        date, siteId,
+        workTypeId: r.workTypeId,
+        people: Number(r.people),
+        hours: Number(r.hours),
+        quantity: isBlank(r.quantity) ? '' : Number(r.quantity),
+        worker: String(r.worker || '').trim(),
+        note: String(r.note || '').trim(),
+        order: entries.length,
+      };
+      // 開始・終了時刻は時間を変えると合わなくなるので消す
+      if (!prev || Number(prev.hours) !== entry.hours) Object.assign(entry, { start: '', end: '', breakMinutes: '' });
+      if (prev) entry.updatedAt = now;
+      const errs = validateEntry(entry);
+      if (errs.length) errors.push(`作業${i + 1}: ${errs.join(' / ')}`);
+      entries.push(entry);
+    });
+    if (!date || !siteId) errors.unshift(!date ? '日付を入力してください' : '現場を選択してください');
+    if (errors.length) return { errors: [...new Set(errors)], saved: 0, added: 0, removed: 0 };
+
+    const keptIds = new Set(entries.map((e) => e.id));
+    const removed = [...existing.keys()].filter((id) => !keptIds.has(id));
+    const drop = new Set([...existing.keys()]);
+    state.entries = state.entries.filter((e) => !drop.has(e.id)).concat(entries);
+    for (const e of entries) {
+      if (e.worker && !state.workers.some((w) => w.name === e.worker)) state.workers.push({ id: newId(), name: e.worker });
+    }
+    return {
+      errors: [], saved: entries.length,
+      added: entries.filter((e) => !existing.has(e.id)).length,
+      removed: removed.length,
+    };
+  }
+
+  /**
+   * 同じ現場で指定日より前の、直近の日報の作業を呼び出す（数量・備考は空にする）。
+   * 戻り値: { date, rows }（該当なしは date: null）
+   */
+  function previousDayRows(state, siteId, beforeDate) {
+    const dates = state.entries.filter((e) => e.siteId === siteId && e.date < beforeDate).map((e) => e.date).sort();
+    const date = dates.pop() || null;
+    if (!date) return { date: null, rows: [] };
+    return {
+      date,
+      rows: dayEntries(state, date, siteId).map((e) => ({
+        workTypeId: e.workTypeId, people: e.people, hours: e.hours, worker: e.worker || '', quantity: '', note: '',
+      })),
+    };
+  }
+
   /** 小分類ID → 大分類ID の対応表 */
   function categoryMap(workTypes) {
     return new Map(workTypes.map((w) => [w.id, w.categoryId]));
@@ -603,7 +682,7 @@
   }
 
   const Core = {
-    addSampleData,
+    addSampleData, isEmptyRow, dayEntries, saveDaySheet, previousDayRows,
     DEFAULT_TAXONOMY, UNCATEGORIZED, SITE_MASTER, emptyState,
     rateOf, compareStandards, addRateMaster, setRate, rateMasterToCsv, importRateMasterCsv, mergeDefaultTaxonomy, defaultUnit,
     findOrAddCategory, findOrAddWorkType, workTypesOfCategory,

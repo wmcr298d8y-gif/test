@@ -298,3 +298,71 @@ test('addSampleData: 現場・マスタ・直近 10 営業日の記録を追加�
   Core.addSampleData(t, '2026-09-25');
   assert.deepEqual(t.entries.map((e) => [e.date, e.people, e.quantity]), s.entries.map((e) => [e.date, e.people, e.quantity]));
 });
+
+test('saveDaySheet: 1 日・1 現場の複数工種をまとめて保存・更新・削除', () => {
+  const s = sampleState();
+  s.entries = [];
+  const rows = [
+    { workTypeId: 'w1', people: 2, hours: 4, quantity: 30, worker: '田中' },
+    { workTypeId: 'w3', people: 2, hours: 4, quantity: 12 },
+    { workTypeId: '', people: 1, hours: 8, quantity: '' }, // 空行は無視
+    { workTypeId: 'w2', people: 1, hours: 8, quantity: '', note: '器具 3F' },
+  ];
+  const r1 = Core.saveDaySheet(s, '2026-09-25', 's1', rows, 1000);
+  assert.deepEqual(r1, { errors: [], saved: 3, added: 3, removed: 0 });
+  let day = Core.dayEntries(s, '2026-09-25', 's1');
+  assert.deepEqual(day.map((e) => [e.workTypeId, e.people * e.hours, e.order]), [['w1', 8, 0], ['w3', 8, 1], ['w2', 8, 2]]);
+  assert.ok(s.workers.some((w) => w.name === '田中'));
+
+  // 並べ替え・1 行更新・1 行削除
+  const edited = [
+    { ...day[2], note: '器具 3F〜4F' },
+    { ...day[0], quantity: 35 },
+  ];
+  const r2 = Core.saveDaySheet(s, '2026-09-25', 's1', edited, 2000);
+  assert.deepEqual(r2, { errors: [], saved: 2, added: 0, removed: 1 });
+  day = Core.dayEntries(s, '2026-09-25', 's1');
+  assert.deepEqual(day.map((e) => e.workTypeId), ['w2', 'w1']);
+  assert.equal(day[1].quantity, 35);
+  assert.equal(day[1].id, edited[1].id);
+  assert.equal(day[1].createdAt, 1000);
+  assert.equal(s.entries.length, 2);
+});
+
+test('saveDaySheet: エラーがあれば何も変えない / 他の日・現場には触れない', () => {
+  const s = sampleState(); // s1 の 9/1 に 2 件、s2 の 9/2 に 2 件
+  const before = JSON.stringify(s.entries);
+  const bad = Core.saveDaySheet(s, '2026-09-01', 's1', [
+    { workTypeId: 'w1', people: 2, hours: 8 },
+    { workTypeId: 'w2', people: 0, hours: 30, quantity: -1 },
+  ]);
+  assert.equal(bad.saved, 0);
+  assert.equal(bad.errors.length, 1);
+  assert.match(bad.errors[0], /^作業2: /);
+  assert.equal(JSON.stringify(s.entries), before);
+  assert.match(Core.saveDaySheet(s, '2026-09-01', '', []).errors[0], /現場/);
+
+  // s1 の 9/1 を全部消しても、s2 の記録は残る
+  const res = Core.saveDaySheet(s, '2026-09-01', 's1', []);
+  assert.equal(res.removed, 2);
+  assert.deepEqual(s.entries.map((e) => e.id).sort(), ['e3', 'e4']);
+});
+
+test('saveDaySheet: 時間を変えた行は開始・終了時刻を消す', () => {
+  const s = sampleState();
+  s.entries = [{ id: 'x', date: '2026-09-25', siteId: 's1', workTypeId: 'w1', people: 1, hours: 8, start: '08:00', end: '17:00', breakMinutes: 60 }];
+  Core.saveDaySheet(s, '2026-09-25', 's1', [{ id: 'x', workTypeId: 'w1', people: 2, hours: 8 }]);
+  assert.equal(s.entries[0].start, '08:00');
+  Core.saveDaySheet(s, '2026-09-25', 's1', [{ id: 'x', workTypeId: 'w1', people: 2, hours: 4 }]);
+  assert.equal(s.entries[0].start, '');
+});
+
+test('previousDayRows: 同じ現場の直近の日の作業を数量なしで呼び出す', () => {
+  const s = sampleState();
+  s.entries.push({ id: 'e5', date: '2026-09-03', siteId: 's1', workTypeId: 'w3', people: 2, hours: 8, quantity: 10, note: 'x' });
+  const prev = Core.previousDayRows(s, 's1', '2026-09-10');
+  assert.equal(prev.date, '2026-09-03');
+  assert.deepEqual(prev.rows, [{ workTypeId: 'w3', people: 2, hours: 8, worker: '', quantity: '', note: '' }]);
+  assert.equal(Core.previousDayRows(s, 's1', '2026-09-03').date, '2026-09-01');
+  assert.equal(Core.previousDayRows(s, 's1', '2026-09-01').date, null);
+});
