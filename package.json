@@ -5,6 +5,7 @@
   "description": "現場での工種別工数を記録するアプリ",
   "scripts": {
     "start": "npx --yes http-server -p 8080 -c-1 .",
-    "test": "node --test"
+    "test": "node --test",
+    "build:artifact": "node scripts/build-artifact.js"
   }
 }

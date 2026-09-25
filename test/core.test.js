@@ -277,3 +277,24 @@ test('normalizeState: 旧形式の小分類の標準歩掛りをマスタへ移�
   // 設定の配列が既定値と共有されていない
   assert.notEqual(Core.emptyState().settings.compareMasterIds, Core.emptyState().settings.compareMasterIds);
 });
+
+test('addSampleData: 現場・マスタ・直近 10 営業日の記録を追加し、集計できる', () => {
+  const s = Core.emptyState();
+  const { sites, masters } = Core.addSampleData(s, '2026-09-25');
+  assert.equal(s.sites.length, 2);
+  assert.equal(s.rateMasters.length, 2);
+  assert.match(masters[0].name, /サンプル/);
+  assert.equal(sites[1].rateMasterId, masters[1].id);
+  const dates = [...new Set(s.entries.map((e) => e.date))].sort();
+  assert.equal(dates.length, 10);
+  assert.equal(dates[dates.length - 1], '2026-09-25');
+  assert.ok(dates.every((d) => ![0, 6].includes(new Date(d + 'T00:00:00').getDay())));
+  assert.ok(s.entries.every((e) => Core.validateEntry(e).length === 0));
+  const rows = Core.compareStandards(Core.productivity(s.entries, s.workTypes, 8, { bySite: true }), s, s.settings.compareMasterIds);
+  assert.ok(rows.some((r) => r.standards[Core.SITE_MASTER].rate !== null));
+  assert.ok(rows.every((r) => r.rate === null || r.standards[masters[0].id].ratio > 50));
+  // 同じ日付なら同じ内容になる
+  const t = Core.emptyState();
+  Core.addSampleData(t, '2026-09-25');
+  assert.deepEqual(t.entries.map((e) => [e.date, e.people, e.quantity]), s.entries.map((e) => [e.date, e.people, e.quantity]));
+});

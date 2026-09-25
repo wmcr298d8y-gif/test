@@ -69,6 +69,111 @@
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
 
+  // ---------- 画面内ダイアログ ----------
+  // ブラウザ標準の alert / confirm / prompt は埋め込み表示などで使えない場合があるため、画面内に表示する
+  const modal = {
+    root: $('#modal'),
+    open({ title = '', message = '', input = null, text = null, buttons }) {
+      return new Promise((resolve) => {
+        const inputEl = $('#modal-input');
+        const textEl = $('#modal-text');
+        $('#modal-title').textContent = title;
+        $('#modal-title').hidden = !title;
+        $('#modal-msg').textContent = message;
+        $('#modal-msg').hidden = !message;
+        inputEl.hidden = input === null;
+        inputEl.value = input ?? '';
+        textEl.hidden = text === null;
+        textEl.value = text ?? '';
+        const actions = $('#modal-actions');
+        actions.innerHTML = '';
+        const prevFocus = document.activeElement;
+        const close = (value) => {
+          this.root.hidden = true;
+          document.removeEventListener('keydown', onKey);
+          if (prevFocus && prevFocus.focus) prevFocus.focus();
+          resolve(value);
+        };
+        const onKey = (ev) => {
+          if (ev.key === 'Escape') close(null);
+          if (ev.key === 'Enter' && ev.target === inputEl) close(inputEl.value);
+        };
+        for (const bt of buttons) {
+          const el = document.createElement('button');
+          el.type = 'button';
+          el.textContent = bt.label;
+          if (bt.className) el.className = bt.className;
+          el.addEventListener('click', async () => {
+            if (bt.onClick) { await bt.onClick(el); return; }
+            close(typeof bt.value === 'function' ? bt.value() : bt.value);
+          });
+          actions.appendChild(el);
+        }
+        this.root.hidden = false;
+        document.addEventListener('keydown', onKey);
+        (input !== null ? inputEl : actions.lastElementChild).focus();
+        if (input !== null) inputEl.select();
+      });
+    },
+  };
+
+  function showAlert(message, title = '') {
+    return modal.open({ title, message, buttons: [{ label: 'OK', className: 'primary', value: true }] });
+  }
+
+  async function askConfirm(message, { ok = 'OK', danger = false, title = '' } = {}) {
+    const v = await modal.open({
+      title, message,
+      buttons: [{ label: 'キャンセル', value: false }, { label: ok, className: danger ? 'danger-fill' : 'primary', value: true }],
+    });
+    return v === true;
+  }
+
+  async function askText(message, defaultValue = '') {
+    const v = await modal.open({
+      message, input: defaultValue,
+      buttons: [{ label: 'キャンセル', value: null }, { label: 'OK', className: 'primary', value: () => $('#modal-input').value }],
+    });
+    return typeof v === 'string' && v.trim() ? v.trim() : null;
+  }
+
+  /**
+   * 出力画面。ファイル保存に加え、保存できない環境向けにコピー（Excel に貼り付け可能なタブ区切り）も用意する。
+   */
+  function showExport({ title, filename, content, type, copyText }) {
+    return modal.open({
+      title,
+      message: '「ファイルに保存」で保存できない場合は「コピー」して、Excel やメモ帳に貼り付けてください。',
+      text: copyText,
+      buttons: [
+        { label: '閉じる', value: null },
+        {
+          label: 'コピー', onClick: async (btn) => {
+            try {
+              await navigator.clipboard.writeText(copyText);
+              btn.textContent = 'コピーしました';
+            } catch (e) {
+              const t = $('#modal-text');
+              t.focus();
+              t.select();
+              btn.textContent = '選択しました（長押し/Ctrl+C でコピー）';
+            }
+          },
+        },
+        { label: 'ファイルに保存', className: 'primary', onClick: () => download(filename, content, type) },
+      ],
+    });
+  }
+
+  /** CSV をタブ区切りに変換（Excel に貼り付けると列に分かれる） */
+  function csvToTsv(csv) {
+    return Core.parseCsv(csv).map((r) => r.map((f) => f.replace(/[\t\r\n]+/g, ' ')).join('\t')).join('\n');
+  }
+
+  function exportCsv(title, filename, csv) {
+    return showExport({ title, filename, content: csv, type: 'text/csv', copyText: csvToTsv(csv) });
+  }
+
   function readFile(file) {
     return new Promise((resolve, reject) => {
       const r = new FileReader();
@@ -244,8 +349,8 @@
     form.scrollIntoView({ behavior: 'smooth' });
   }
 
-  function deleteEntry(id) {
-    if (!confirm('この記録を削除しますか？')) return;
+  async function deleteEntry(id) {
+    if (!await askConfirm('この記録を削除しますか？', { ok: '削除する', danger: true })) return;
     state.entries = state.entries.filter((x) => x.id !== id);
     save();
     if (form.elements.id.value === id) resetForm(true);
@@ -639,7 +744,7 @@
     render();
   }));
 
-  document.addEventListener('click', (ev) => {
+  document.addEventListener('click', async (ev) => {
     const b = ev.target.closest('button[data-master-act]');
     if (!b) return;
     const { masterAct, key, id } = b.dataset;
@@ -653,19 +758,19 @@
       if (j < 0) return;
       [list[j], list[i]] = [list[i], list[j]];
     } else if (masterAct === 'rename') {
-      const name = prompt('新しい名前', list[i].name);
-      if (!name || !name.trim()) return;
-      list[i].name = name.trim();
+      const name = await askText('新しい名前', list[i].name);
+      if (!name) return;
+      list[i].name = name;
     } else if (masterAct === 'del') {
       if (key === 'categories' && Core.workTypesOfCategory(state, id).length) {
-        alert(`「${list[i].name}」には小分類があります。先に小分類を削除するか、別の大分類へ移動してください。`);
+        await showAlert(`「${list[i].name}」には小分類があります。先に小分類を削除するか、別の大分類へ移動してください。`);
         return;
       }
       const used = usageCount(key, id);
       const msg = used
         ? `「${list[i].name}」は ${used} 件の記録で使われています。削除すると記録の表示が「(削除済み)」になります。削除しますか？`
         : `「${list[i].name}」を削除しますか？`;
-      if (!confirm(msg)) return;
+      if (!await askConfirm(msg, { ok: '削除する', danger: true })) return;
       list.splice(i, 1);
     }
     save();
@@ -789,7 +894,7 @@
     render();
   });
 
-  $('#rm-list').addEventListener('click', (ev) => {
+  $('#rm-list').addEventListener('click', async (ev) => {
     const b = ev.target.closest('button[data-rm-act]');
     if (!b) return;
     const list = state.rateMasters;
@@ -806,18 +911,18 @@
     if (act === 'up' && i > 0) {
       [list[i - 1], list[i]] = [list[i], list[i - 1]];
     } else if (act === 'copy') {
-      const name = prompt('複製したマスタの名前', m.name + ' のコピー');
-      if (!name || !name.trim()) return;
-      editingMasterId = Core.addRateMaster(state, name.trim(), { note: m.note, copyFromId: m.id }).id;
+      const name = await askText('複製したマスタの名前', m.name + ' のコピー');
+      if (!name) return;
+      editingMasterId = Core.addRateMaster(state, name, { note: m.note, copyFromId: m.id }).id;
     } else if (act === 'rename') {
-      const name = prompt('新しい名前', m.name);
-      if (!name || !name.trim()) return;
-      m.name = name.trim();
+      const name = await askText('新しい名前', m.name);
+      if (!name) return;
+      m.name = name;
     } else if (act === 'del') {
       const sites = state.sites.filter((x) => x.rateMasterId === m.id);
       const msg = `歩掛りマスタ「${m.name}」（${Object.keys(m.rates).length} 件）を削除しますか？` +
         (sites.length ? `\n現場 ${sites.length} 件の元請マスタ設定も解除されます。` : '');
-      if (!confirm(msg)) return;
+      if (!await askConfirm(msg, { ok: '削除する', danger: true })) return;
       list.splice(i, 1);
       sites.forEach((x) => { x.rateMasterId = ''; });
       state.settings.compareMasterIds = state.settings.compareMasterIds.filter((id) => id !== m.id);
@@ -854,7 +959,7 @@
 
   $('#rm-export').addEventListener('click', () => {
     const m = editingMaster();
-    if (m) download(`歩掛りマスタ_${m.name.replace(/[\\/:*?"<>|]/g, '_')}_${stamp()}.csv`, Core.rateMasterToCsv(state, m), 'text/csv');
+    if (m) exportCsv(`「${m.name}」の CSV`, `歩掛りマスタ_${m.name.replace(/[\\/:*?"<>|]/g, '_')}_${stamp()}.csv`, Core.rateMasterToCsv(state, m));
   });
 
   $('#rm-import').addEventListener('change', async (ev) => {
@@ -866,11 +971,11 @@
       const { updated, createdWorkTypes, errors } = Core.importRateMasterCsv(state, m, await readFile(file));
       save();
       render();
-      alert(`「${m.name}」に ${updated} 件の歩掛りを取り込みました。` +
+      showAlert(`「${m.name}」に ${updated} 件の歩掛りを取り込みました。` +
         (createdWorkTypes ? `\n未登録だった小分類 ${createdWorkTypes} 件を追加しました。` : '') +
         (errors.length ? `\n\n取り込めなかった行:\n${errors.slice(0, 20).join('\n')}` : ''));
     } catch (e) {
-      alert('CSV を読み込めませんでした: ' + e.message);
+      showAlert('CSV を読み込めませんでした: ' + e.message);
     }
   });
 
@@ -878,7 +983,8 @@
   const stamp = () => toISODate(new Date()).replace(/-/g, '');
 
   $('#backup-json').addEventListener('click', () => {
-    download(`工数記録_バックアップ_${stamp()}.json`, JSON.stringify(state, null, 2), 'application/json');
+    const json = JSON.stringify(state, null, 2);
+    showExport({ title: 'バックアップ', filename: `工数記録_バックアップ_${stamp()}.json`, content: json, type: 'application/json', copyText: json });
   });
 
   $('#restore-json').addEventListener('change', async (ev) => {
@@ -887,23 +993,23 @@
     if (!file) return;
     try {
       const data = JSON.parse(await readFile(file));
-      if (!confirm('現在のデータをバックアップの内容で置き換えます。よろしいですか？')) return;
+      if (!await askConfirm('現在のデータをバックアップの内容で置き換えます。よろしいですか？', { ok: '置き換える', danger: true })) return;
       state = Core.normalizeState(data);
       save();
       resetForm(false);
       render();
       toast(`復元しました（${state.entries.length} 件）`);
     } catch (e) {
-      alert('バックアップファイルを読み込めませんでした: ' + e.message);
+      showAlert('バックアップファイルを読み込めませんでした: ' + e.message);
     }
   });
 
   $('#export-all-csv').addEventListener('click', () => {
-    download(`工数記録_${stamp()}.csv`, Core.entriesToCsv(state, state.entries), 'text/csv');
+    exportCsv('全記録の CSV', `工数記録_${stamp()}.csv`, Core.entriesToCsv(state, state.entries));
   });
 
   $('#export-list-csv').addEventListener('click', () => {
-    download(`工数記録_${stamp()}.csv`, Core.entriesToCsv(state, listFiltered()), 'text/csv');
+    exportCsv('表示中の記録の CSV', `工数記録_${stamp()}.csv`, Core.entriesToCsv(state, listFiltered()));
   });
 
   $('#import-csv').addEventListener('change', async (ev) => {
@@ -914,20 +1020,42 @@
       const { added, errors } = Core.importCsv(state, await readFile(file));
       save();
       render();
-      alert(`${added} 件取り込みました。` + (errors.length ? `\n\n取り込めなかった行:\n${errors.slice(0, 20).join('\n')}` : ''));
+      showAlert(`${added} 件取り込みました。` + (errors.length ? `\n\n取り込めなかった行:\n${errors.slice(0, 20).join('\n')}` : ''));
     } catch (e) {
-      alert('CSV を読み込めませんでした: ' + e.message);
+      showAlert('CSV を読み込めませんでした: ' + e.message);
     }
   });
 
-  $('#clear-all').addEventListener('click', () => {
-    if (!confirm('すべての記録とマスタを削除します。元に戻せません。よろしいですか？')) return;
-    if (!confirm('本当に削除しますか？（先にバックアップを保存することをおすすめします）')) return;
+  $('#clear-all').addEventListener('click', async () => {
+    if (!await askConfirm('すべての記録とマスタを削除します。元に戻せません。先にバックアップを保存することをおすすめします。',
+      { ok: 'すべて削除する', danger: true, title: '全データの削除' })) return;
     state = Core.emptyState();
     save();
     resetForm(false);
     render();
     toast('全データを削除しました');
+  });
+
+  // ---------- サンプルデータ ----------
+  function loadSample() {
+    const { sites } = Core.addSampleData(state, toISODate(new Date()));
+    state.settings.lastSiteId = sites[0].id;
+    save();
+    resetForm(false);
+    setPeriod('all');
+    showTab('summary');
+    $('#rate-by-site').checked = true;
+    renderSummary();
+    toast('サンプルデータを追加しました');
+  }
+
+  $('#load-sample').addEventListener('click', loadSample);
+  $('#add-sample').addEventListener('click', loadSample);
+  $('#start-own').addEventListener('click', () => {
+    state.settings.welcomeDismissed = true;
+    save();
+    showTab('master');
+    $('#master-sites').scrollIntoView({ behavior: 'smooth', block: 'center' });
   });
 
   // ---------- 描画 ----------
@@ -950,7 +1078,11 @@
   function render() {
     renderSelects();
     const tab = currentTab();
-    if (tab === 'entry') { renderDayList(); updatePreview(); }
+    if (tab === 'entry') {
+      $('#welcome').hidden = !!(state.settings.welcomeDismissed || state.sites.length || state.entries.length);
+      renderDayList();
+      updatePreview();
+    }
     else if (tab === 'list') renderList();
     else if (tab === 'summary') renderSummary();
     else if (tab === 'rates') renderRateMasters();
@@ -962,9 +1094,9 @@
   resetForm(false);
   setPeriod('month');
   render();
-  if (!state.sites.length) toast('まず「設定」タブで現場を登録してください');
 
-  if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+  // 他のページに埋め込まれている場合（プレビュー公開など）はオフライン機能を使わない
+  if ('serviceWorker' in navigator && location.protocol.startsWith('http') && window.self === window.top) {
     navigator.serviceWorker.register('sw.js').catch((e) => console.warn('Service worker 登録失敗', e));
   }
 })();

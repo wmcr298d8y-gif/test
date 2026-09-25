@@ -8,12 +8,16 @@
   --primary-text: #ffffff;
   --accent-bg: #e6eff8;
   --danger: #c0392b;
+  --good: #2e8b57;
   --bar: #5b8fc7;
+  --overlay: rgba(16, 24, 40, 0.45);
   --radius: 10px;
 }
 
+/* ダーク配色（OS 設定に従う。埋め込み先が data-theme を指定した場合はそちらを優先） */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
     --bg: #12161c;
     --surface: #1c222b;
     --text: #e6e9ee;
@@ -23,8 +27,25 @@
     --primary-text: #0b1520;
     --accent-bg: #223244;
     --danger: #ef6b5b;
+    --good: #5cc28a;
     --bar: #4a8fd4;
+    --overlay: rgba(0, 0, 0, 0.6);
   }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #12161c;
+  --surface: #1c222b;
+  --text: #e6e9ee;
+  --muted: #98a2b3;
+  --border: #333c48;
+  --primary: #4a8fd4;
+  --primary-text: #0b1520;
+  --accent-bg: #223244;
+  --danger: #ef6b5b;
+  --good: #5cc28a;
+  --bar: #4a8fd4;
+  --overlay: rgba(0, 0, 0, 0.6);
 }
 
 * { box-sizing: border-box; }
@@ -53,7 +74,7 @@ body {
 
 .tabs {
   position: sticky;
-  top: 0;
+  top: env(safe-area-inset-top, 0px);
   z-index: 10;
   display: grid;
   grid-template-columns: repeat(5, 1fr);
@@ -218,7 +239,7 @@ thead th { font-size: 0.8rem; color: var(--muted); }
 .rates tr > :first-child { position: sticky; left: 0; background: var(--surface); z-index: 1; }
 .rate-val { font-weight: 700; font-size: 1rem; }
 .over { color: var(--danger); font-weight: 700; }
-.under { color: #2e8b57; font-weight: 700; }
+.under { color: var(--good); font-weight: 700; }
 .wt-extra { display: flex; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
 .wt-extra label { display: flex; flex-direction: column; font-size: 0.7rem; color: var(--muted); gap: 2px; }
 .wt-extra input { min-height: 34px; padding: 4px 8px; font-size: 0.85rem; }
@@ -258,3 +279,28 @@ thead th { font-size: 0.8rem; color: var(--muted); }
 .rates .wt-cell { white-space: normal; min-width: 8.5em; max-width: 10em; }
 .rates .wt-cell .site-name { font-size: 0.75rem; font-weight: 700; }
 .rates .std-head { min-width: 5.5em; }
+
+.modal {
+  position: fixed; inset: 0; z-index: 100;
+  display: flex; align-items: center; justify-content: center;
+  padding: 16px; background: var(--overlay);
+}
+.modal-box {
+  width: 100%; max-width: 480px; max-height: calc(100% - 32px); overflow-y: auto;
+  background: var(--surface); color: var(--text);
+  border-radius: var(--radius); padding: 20px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+  display: flex; flex-direction: column; gap: 12px;
+}
+.modal-box h2 { margin: 0; font-size: 1.05rem; }
+.modal-msg { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.modal-box textarea { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 0.75rem; white-space: pre; }
+.modal-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+button.danger-fill { background: var(--danger); border-color: var(--danger); color: #fff; font-weight: 700; }
+
+.welcome {
+  background: var(--accent-bg); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 16px; margin-bottom: 16px;
+}
+.welcome h2 { margin: 0 0 8px; }
+.welcome p { margin: 0; }

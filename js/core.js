@@ -519,7 +519,91 @@
     return state;
   }
 
+  // ---------- サンプルデータ（お試し用） ----------
+
+  /** 再現性のある疑似乱数（同じ日付なら同じサンプルになる） */
+  function seededRandom(seed) {
+    let t = seed >>> 0;
+    return () => {
+      t += 0x6D2B79F5;
+      let r = Math.imul(t ^ (t >>> 15), 1 | t);
+      r ^= r + Math.imul(r ^ (r >>> 7), 61 | r);
+      return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  /**
+   * お試し用のサンプル（現場 2 件・歩掛りマスタ 2 件・直近 2 週間の記録）を追加する。
+   * 歩掛りの値はデモ用の仮の値で、国交省などの実際の値ではない。
+   */
+  function addSampleData(state, todayIso) {
+    mergeDefaultTaxonomy(state);
+    const wt = (name) => state.workTypes.find((w) => w.name === name);
+    // [小分類, サンプル標準, サンプル元請]
+    const sampleRates = [
+      ['電線管敷設（露出）', 0.025, 0.03], ['ボックス取付', 0.04, 0.045], ['ケーブル配線（VVF等）', 0.012, 0.015],
+      ['幹線ケーブル敷設', 0.05, 0.06], ['照明器具取付', 0.12, 0.15], ['コンセント取付', 0.05, 0.06],
+      ['スイッチ取付', 0.05, 0.06], ['分電盤据付', 1.5, 1.8], ['LAN配線', 0.01, 0.012], ['自火報 感知器取付', 0.06, 0.07],
+    ].filter(([n]) => wt(n));
+    const std = addRateMaster(state, '標準歩掛り（サンプル値）', { note: 'お試し用の仮の値です。国交省の実際の歩掛りではありません。' });
+    const gen = addRateMaster(state, '元請 ○○建設（サンプル値）', { note: 'お試し用の仮の値です。' });
+    for (const [n, a, b] of sampleRates) { std.rates[wt(n).id] = a; gen.rates[wt(n).id] = b; }
+
+    const siteA = { id: newId(), name: '【サンプル】A病院 改修電気工事', rateMasterId: '' };
+    const siteB = { id: newId(), name: '【サンプル】B庁舎 新築電気工事', rateMasterId: gen.id };
+    state.sites.push(siteA, siteB);
+    for (const name of ['電工 田中', '電工 佐藤', '△△電設（協力会社）']) {
+      if (!state.workers.some((w) => w.name === name)) state.workers.push({ id: newId(), name });
+    }
+
+    // 工程の順に作業が進むように、日ごとの作業候補を切り替える
+    const phases = [
+      ['電線管敷設（露出）', 'ボックス取付', 'LAN配線'],
+      ['ケーブル配線（VVF等）', '幹線ケーブル敷設', 'LAN配線'],
+      ['照明器具取付', 'コンセント取付', 'スイッチ取付', '分電盤据付', '自火報 感知器取付'],
+    ].map((names) => names.filter((n) => wt(n)));
+    const days = [];
+    const d = new Date(todayIso + 'T00:00:00');
+    while (days.length < 10) {
+      if (d.getDay() !== 0 && d.getDay() !== 6) {
+        // toISOString は UTC になり日本時間では前日にずれるため、端末の日付で組み立てる
+        days.unshift(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`);
+      }
+      d.setDate(d.getDate() - 1);
+    }
+    const rand = seededRandom(Number(todayIso.replace(/-/g, '')));
+    const pick = (arr) => arr[Math.floor(rand() * arr.length)];
+    const rateBy = new Map(sampleRates.map(([n, a]) => [n, a]));
+    let n = 0;
+    days.forEach((date, i) => {
+      const phase = phases[Math.min(phases.length - 1, Math.floor((i / days.length) * phases.length))];
+      for (const site of [siteA, siteB]) {
+        const tasks = new Set([pick(phase), pick(phase)]);
+        for (const name of tasks) {
+          const people = 1 + Math.floor(rand() * 3);
+          const hours = pick([8, 8, 8, 6, 4]);
+          const manDays = (people * hours) / (state.settings.hoursPerManDay || 8);
+          // 実績は標準の 0.8〜1.35 倍程度でばらつかせる。B 現場はやや手間がかかる想定
+          const factor = 0.8 + rand() * 0.45 + (site === siteB ? 0.1 : 0);
+          const raw = manDays / (rateBy.get(name) * factor);
+          const quantity = raw >= 20 ? Math.round(raw / 5) * 5 : Math.max(1, Math.round(raw));
+          state.entries.push({
+            id: newId(), date, siteId: site.id, workTypeId: wt(name).id,
+            worker: pick(state.workers).name, people, hours,
+            start: '', end: '', breakMinutes: '', quantity,
+            // 一部の日は数量を翌日にまとめて入力した想定で空欄にする
+            ...(rand() < 0.15 ? { quantity: '' } : {}),
+            note: '', createdAt: Date.now() + n++,
+          });
+        }
+      }
+    });
+    state.settings.compareMasterIds = [std.id, SITE_MASTER];
+    return { sites: [siteA, siteB], masters: [std, gen] };
+  }
+
   const Core = {
+    addSampleData,
     DEFAULT_TAXONOMY, UNCATEGORIZED, SITE_MASTER, emptyState,
     rateOf, compareStandards, addRateMaster, setRate, rateMasterToCsv, importRateMasterCsv, mergeDefaultTaxonomy, defaultUnit,
     findOrAddCategory, findOrAddWorkType, workTypesOfCategory,
