@@ -20,8 +20,9 @@
   </header>
 
   <nav class="tabs" role="tablist">
-    <button role="tab" data-tab="entry" data-roles="site admin" aria-selected="true">入力</button>
-    <button role="tab" data-tab="list" data-roles="site admin">一覧</button>
+    <button role="tab" data-tab="report" data-roles="site admin" aria-selected="true">日報</button>
+    <button role="tab" data-tab="entry" data-roles="site admin">工数</button>
+    <button role="tab" data-tab="site" data-roles="site admin">現場</button>
     <button role="tab" data-tab="cumul" data-roles="site admin">累計</button>
     <button role="tab" data-tab="summary" data-roles="admin">集計</button>
     <button role="tab" data-tab="rates" data-roles="admin">歩掛り</button>
@@ -29,34 +30,96 @@
   </nav>
 
   <main>
-    <!-- 入力 -->
-    <section id="tab-entry" class="panel" role="tabpanel">
-      <div class="welcome" id="welcome" hidden>
-        <h2>はじめに</h2>
-        <p>サンプルデータ（現場 4 件〔うち完工 2 件〕・社員 3 名・記録）を入れると、
-          日報の入力や累計・集計・自社の実績歩掛りをすぐに試せます。画面右上で「現場用」「管理者用」を切り替えられます（モック用の切り替えです）。
-          サンプルは「管理者用 → 設定 → 全データを削除」でいつでも消せます。</p>
-        <div class="actions wrap">
-          <button type="button" class="primary" id="load-sample">サンプルデータで試す</button>
-          <button type="button" id="start-own">自分のデータで始める</button>
+    <div class="welcome" id="welcome" hidden>
+      <h2>はじめに</h2>
+      <p>サンプルデータ（現場 4 件〔うち完工 2 件〕・社員 3 名・日報と工数の記録）を入れると、
+        日報・工数・現場の引き継ぎ情報・集計をすぐに試せます。画面右上で「現場用」「管理者用」を切り替えられます（モック用の切り替えです）。
+        サンプルは「管理者用 → 設定 → 全データを削除」でいつでも消せます。</p>
+      <div class="actions wrap">
+        <button type="button" class="primary" id="load-sample">サンプルデータで試す</button>
+        <button type="button" id="start-own">自分のデータで始める</button>
+      </div>
+    </div>
+
+    <!-- 日報・工数・現場で共通の選択欄（入力者・日付・現場） -->
+    <div class="context" id="context">
+      <div class="sheet-head">
+        <div class="field">
+          <label for="f-inputby">入力者</label>
+          <select id="f-inputby" name="inputBy" form="entry-form"></select>
+        </div>
+        <div class="field">
+          <label for="f-date">日付</label>
+          <input id="f-date" type="date" name="date" form="entry-form" required>
+        </div>
+        <div class="field">
+          <label for="f-site">現場</label>
+          <select id="f-site" name="siteId" form="entry-form" required></select>
         </div>
       </div>
-      <form id="entry-form" novalidate>
-        <div class="sheet-head">
-          <div class="field">
-            <label for="f-inputby">入力者</label>
-            <select id="f-inputby" name="inputBy"></select>
-          </div>
-          <div class="field">
-            <label for="f-date">日付</label>
-            <input id="f-date" type="date" name="date" required>
-          </div>
-          <div class="field">
-            <label for="f-site">現場</label>
-            <select id="f-site" name="siteId" required></select>
-          </div>
+      <div class="day-sites" id="day-sites"></div>
+    </div>
+
+    <!-- 日報（必須） -->
+    <section id="tab-report" class="panel" role="tabpanel">
+      <form id="report-form" novalidate>
+        <p class="report-origin" id="rp-origin"></p>
+        <p class="sheet-lock" id="rp-lock" hidden></p>
+        <fieldset class="sheet-fields" id="rp-fields">
+          <legend class="visually-hidden">日報</legend>
+
+          <section class="rp-block">
+            <h2>天候 <span class="optional">任意</span></h2>
+            <div class="weather" id="rp-weather" role="group" aria-label="天候"></div>
+          </section>
+
+          <section class="rp-block">
+            <h2>出面</h2>
+            <div class="crew-list" id="rp-crew"></div>
+            <button type="button" class="add-sub" id="rp-add-sub">＋ 協力会社を追加</button>
+            <datalist id="sub-names"></datalist>
+          </section>
+
+          <section class="rp-block">
+            <h2>今日の作業</h2>
+            <p class="muted small">「場所」と「作業」を書き、完了・途中・未着手を選びます。途中・未着手の作業は明日の予定に自動で入ります。</p>
+            <div class="task-list" id="rp-tasks"></div>
+            <button type="button" class="add-row" id="rp-add-task">＋ 作業を追加</button>
+          </section>
+
+          <section class="rp-block">
+            <h2>明日の予定</h2>
+            <p class="muted small">代わりの人が見ても分かるように、場所と作業を書いてください。</p>
+            <div class="task-list" id="rp-plans"></div>
+            <button type="button" class="add-row" id="rp-add-plan">＋ 予定を追加</button>
+          </section>
+
+          <section class="rp-block">
+            <h2><label for="rp-notes">特記事項</label> <span class="optional">任意</span></h2>
+            <textarea id="rp-notes" rows="3" placeholder="元請との打合せ・指示、トラブル、安全、資材の不足など"></textarea>
+          </section>
+
+          <section class="rp-block">
+            <h2>写真 <span class="optional">任意</span></h2>
+            <div class="photos" id="rp-photos"></div>
+            <label class="button" for="rp-photo-input">写真を追加（作業を終えた場所など）
+              <input type="file" id="rp-photo-input" accept="image/*" multiple hidden>
+            </label>
+          </section>
+        </fieldset>
+        <ul class="errors" id="rp-errors"></ul>
+
+        <div class="sheet-bar">
+          <div class="sheet-total" id="rp-status"></div>
+          <button type="submit" class="primary" id="rp-save">保存</button>
         </div>
-        <div class="day-sites" id="day-sites"></div>
+      </form>
+    </section>
+
+    <!-- 工数（任意） -->
+    <section id="tab-entry" class="panel" role="tabpanel" hidden>
+      <form id="entry-form" novalidate>
+        <div class="crew-banner" id="entry-crew"></div>
         <p class="sheet-lock" id="sheet-lock" hidden></p>
 
         <fieldset class="sheet-fields" id="sheet-fields">
@@ -75,6 +138,42 @@
           <button type="submit" class="primary" id="save-sheet">保存</button>
         </div>
       </form>
+    </section>
+
+    <!-- 現場（引き継ぎ） -->
+    <section id="tab-site" class="panel" role="tabpanel" hidden>
+      <div class="sv-head" id="sv-head"></div>
+
+      <section class="sv-block">
+        <div class="section-head">
+          <h2>現場ノート</h2>
+          <button type="button" id="sv-edit-note">編集</button>
+        </div>
+        <dl class="notebook" id="sv-note"></dl>
+        <form class="notebook-form" id="sv-note-form" hidden></form>
+      </section>
+
+      <section class="sv-block">
+        <h2 id="sv-today-title">今日やること</h2>
+        <p class="muted small" id="sv-today-src"></p>
+        <ul class="todo" id="sv-today"></ul>
+      </section>
+
+      <section class="sv-block">
+        <h2>近日の予定</h2>
+        <ul class="events" id="sv-events"></ul>
+        <form class="add-form event-form" id="sv-event-form">
+          <input type="date" name="date" required aria-label="予定の日付">
+          <input type="text" name="title" placeholder="検査・打合せ・搬入など" required aria-label="予定の内容">
+          <button type="submit">追加</button>
+        </form>
+      </section>
+
+      <section class="sv-block">
+        <h2>これまでの日報</h2>
+        <div class="report-history" id="sv-reports"></div>
+        <button type="button" id="sv-more" hidden>さらに表示</button>
+      </section>
     </section>
 
     <!-- 累計 -->
@@ -98,22 +197,6 @@
       <p class="muted small">歩掛り = 着工から指定日までの人工合計 ÷ 数量合計（人工/単位）。</p>
     </section>
 
-    <!-- 一覧 -->
-    <section id="tab-list" class="panel" role="tabpanel" hidden>
-      <div class="filters" id="list-filters">
-        <div class="field"><label>開始日</label><input type="date" name="from"></div>
-        <div class="field"><label>終了日</label><input type="date" name="to"></div>
-        <div class="field"><label>現場</label><select name="siteId"></select></div>
-        <div class="field"><label>大分類</label><select name="categoryId"></select></div>
-        <div class="field"><label>小分類</label><select name="workTypeId"></select></div>
-      </div>
-      <p class="muted" id="list-count"></p>
-      <div id="entry-list"></div>
-      <div class="actions">
-        <button type="button" id="export-list-csv">表示中の記録を CSV 出力</button>
-      </div>
-    </section>
-
     <!-- 集計 -->
     <section id="tab-summary" class="panel" role="tabpanel" hidden>
       <div class="filters" id="summary-filters">
@@ -131,6 +214,8 @@
           </div>
         </div>
       </div>
+      <h2>日報の提出状況（直近 7 日）</h2>
+      <div class="table-scroll" id="summary-submission"></div>
       <div class="totals" id="summary-totals"></div>
       <div class="section-head">
         <h2>月別・工種別</h2>
@@ -155,6 +240,12 @@
       <div id="summary-by-site"></div>
       <h2>大分類 × 日付（延べ工数 h）</h2>
       <div class="table-scroll" id="summary-pivot"></div>
+      <h2>工数の明細</h2>
+      <p class="muted" id="list-count"></p>
+      <div id="entry-list"></div>
+      <div class="actions">
+        <button type="button" id="export-list-csv">表示中の工数を CSV 出力</button>
+      </div>
     </section>
 
     <!-- 自社の実績歩掛り -->

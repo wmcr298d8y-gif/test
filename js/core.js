@@ -394,7 +394,8 @@
   ];
 
   function normalizeTask(t) {
-    return { id: t.id || newId(), place: t.place || '', work: t.work || '', workTypeId: t.workTypeId || '', status: t.status || 'notyet', memo: t.memo || '' };
+    // skipCarry: 途中・未着手でも明日の予定には入れない（利用者が予定から外した）
+    return { id: t.id || newId(), place: t.place || '', work: t.work || '', workTypeId: t.workTypeId || '', status: t.status || 'notyet', memo: t.memo || '', skipCarry: !!t.skipCarry };
   }
 
   function normalizePlan(p) {
@@ -497,11 +498,11 @@
     report.tomorrow = report.tomorrow.filter((p) => {
       if (!p.fromTaskId) return true;
       const t = byTask.get(p.fromTaskId);
-      return t && t.status !== 'done';
+      return t && t.status !== 'done' && !t.skipCarry;
     });
     const keys = new Set(report.tomorrow.map(itemKey));
     for (const t of report.tasks) {
-      if (t.status === 'done' || !(t.place.trim() || t.work.trim())) continue;
+      if (t.status === 'done' || t.skipCarry || !(t.place.trim() || t.work.trim())) continue;
       const linked = report.tomorrow.find((p) => p.fromTaskId === t.id);
       if (linked) {
         // 作業の内容を直したら、自動で入れた予定も合わせる
@@ -954,7 +955,9 @@
           crew: { own: total - subs.reduce((sum, x) => sum + x.people, 0), subs },
           tasks, tomorrow,
           notes: rand() < 0.2 ? '元請と打合せ。天井内の検査日程を確認。' : '',
-          createdAt: Date.now() + n++,
+          // 作成・更新日時はその日の 17:30 とする
+          createdAt: new Date(date + 'T17:30:00').getTime(),
+          updatedAt: new Date(date + 'T17:30:00').getTime(),
         }));
       });
     }

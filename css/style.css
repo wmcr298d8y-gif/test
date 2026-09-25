@@ -396,3 +396,118 @@ button.chip { min-height: 32px; }
 .pill.kind { background: var(--bg); color: var(--muted); border: 1px solid var(--border); }
 .pill.few { background: var(--bg); color: var(--muted); border: 1px dashed var(--muted); font-weight: 400; }
 .rates.company .wt-cell { white-space: normal; }
+
+/* ---------- 日報 ---------- */
+.context { margin-bottom: 8px; }
+.report-origin { margin: 0 0 12px; font-size: 0.85rem; }
+.rp-block {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 12px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 8px;
+}
+.rp-block h2 { margin: 0; font-size: 1rem; }
+.rp-block > .muted.small { margin: -4px 0 0; }
+.rp-block textarea { resize: vertical; }
+
+.weather { display: flex; gap: 8px; flex-wrap: wrap; }
+.weather button { min-width: 56px; }
+.weather button[aria-pressed="true"], .task-status button[aria-pressed="true"] {
+  background: var(--primary); color: var(--primary-text); border-color: var(--primary); font-weight: 700;
+}
+
+.crew-list { display: flex; flex-direction: column; gap: 8px; }
+.crew-row { display: grid; grid-template-columns: minmax(0, 1fr) 150px auto 32px; gap: 8px; align-items: center; }
+.crew-name { font-weight: 700; }
+.crew-unit { color: var(--muted); font-size: 0.85rem; }
+.crew-row .stepper { grid-template-columns: 40px minmax(0, 1fr) 40px; }
+.crew-row .stepper button { min-height: 40px; }
+.crew-row .stepper input { min-height: 40px; }
+.crew-total { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.add-sub { align-self: flex-start; }
+
+.task-list { display: flex; flex-direction: column; gap: 8px; }
+.task {
+  border: 1px solid var(--border); border-left: 4px solid var(--border); border-radius: 8px;
+  padding: 8px; display: flex; flex-direction: column; gap: 6px; background: var(--surface);
+}
+.task.status-done { border-left-color: var(--good); }
+.task.status-partial { border-left-color: var(--warn-text); }
+.task.status-notyet { border-left-color: var(--muted); }
+.task.plan { border-left-color: var(--primary); }
+.task-head { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.task-status { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.task-status button { min-height: 34px; padding: 2px 12px; border: 0; border-radius: 0; font-size: 0.85rem; }
+.task-status button + button { border-left: 1px solid var(--border); }
+.task-fields { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 6px; }
+.task input, .task select { min-height: 38px; padding: 6px 10px; }
+.task-wt { font-size: 0.85rem; color: var(--muted); }
+.task-del { min-height: 30px; padding: 2px 10px; font-size: 0.8rem; }
+
+.photos { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+.photos:empty { display: none; }
+.photo { position: relative; margin: 0; display: flex; flex-direction: column; gap: 4px; }
+.photo img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 8px; cursor: zoom-in; }
+.photo.expanded { grid-column: 1 / -1; }
+.photo.expanded img { aspect-ratio: auto; object-fit: contain; cursor: zoom-out; }
+.photo input { min-height: 34px; padding: 4px 8px; font-size: 0.8rem; }
+.photo .task-del { position: absolute; top: 4px; right: 4px; background: var(--surface); }
+.photo figcaption { font-size: 0.8rem; color: var(--muted); }
+
+.crew-banner {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between;
+  background: var(--accent-bg); border-radius: var(--radius); padding: 10px 12px; margin-bottom: 10px; font-size: 0.9rem;
+}
+.crew-banner:empty { display: none; }
+
+/* ---------- 現場（引き継ぎ） ---------- */
+.sv-head { margin-bottom: 8px; }
+.sv-title { margin: 0; font-size: 1.1rem; }
+.sv-head p { margin: 4px 0 0; display: flex; gap: 6px; }
+.sv-block {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 12px; margin-bottom: 12px;
+}
+.sv-block h2 { margin: 0 0 6px; }
+.sv-block .section-head h2 { margin: 0; }
+.notebook { margin: 8px 0 0; display: grid; grid-template-columns: minmax(7em, auto) 1fr; gap: 6px 12px; }
+.notebook dt { font-size: 0.8rem; font-weight: 700; color: var(--muted); }
+.notebook dd { margin: 0; }
+.notebook > p { grid-column: 1 / -1; margin: 0; }
+@media (max-width: 480px) { .notebook { grid-template-columns: 1fr; gap: 2px; } .notebook dd { margin-bottom: 8px; } }
+.notebook-form { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+.pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.todo { list-style: none; padding: 0; margin: 4px 0 0; display: flex; flex-direction: column; gap: 6px; }
+.todo li { display: flex; gap: 8px; align-items: flex-start; }
+.todo-box { flex: 0 0 18px; height: 18px; border: 2px solid var(--muted); border-radius: 4px; margin-top: 2px; }
+.pill.st-done { background: color-mix(in srgb, var(--good) 18%, var(--surface)); color: var(--good); }
+.pill.st-partial { background: var(--warn-bg); color: var(--warn-text); }
+.pill.st-notyet { background: var(--bg); color: var(--muted); border: 1px solid var(--border); }
+
+.events { list-style: none; padding: 0; margin: 0 0 8px; display: flex; flex-direction: column; gap: 6px; }
+.events li { display: grid; grid-template-columns: 5.5em 1fr auto; gap: 8px; align-items: center; }
+.event-date { font-weight: 700; font-variant-numeric: tabular-nums; }
+.event-form { flex-wrap: wrap; }
+.event-form input[type=date] { flex: 0 0 10em; }
+
+.report-history { display: flex; flex-direction: column; gap: 6px; }
+.report-card { border: 1px solid var(--border); border-radius: 8px; }
+.report-card > summary { cursor: pointer; padding: 8px 10px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.report-body { padding: 0 12px 12px; }
+.report-body h3 { font-size: 0.85rem; margin: 10px 0 2px; color: var(--muted); }
+.report-body p { margin: 4px 0; }
+#sv-more { margin-top: 8px; }
+
+/* ---------- 集計: 日報の提出状況 ---------- */
+.submission td, .submission th { text-align: center; }
+.submission tbody th { text-align: left; white-space: nowrap; font-weight: 400; font-size: 0.85rem; }
+.submission .holiday { background: var(--bg); }
+.sub-cell { min-height: 30px; min-width: 36px; padding: 0 6px; border-radius: 6px; font-weight: 700; }
+.sub-cell.ok { color: var(--good); border-color: transparent; background: transparent; }
+.sub-cell.ng { color: var(--danger); border-color: var(--danger); background: transparent; }
+.holiday .sub-cell.ng { border-color: transparent; }
+
+/* 共通の選択欄: 現場名は長いので 1 行を使う */
+.context .sheet-head { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.context .sheet-head .field:last-child { grid-column: 1 / -1; }
+@media (min-width: 720px) { .context .sheet-head { grid-template-columns: 1fr 1fr 2fr; } .context .sheet-head .field:last-child { grid-column: auto; } }
+.event-form input[name=title] { flex: 1 1 12em; min-width: 0; }

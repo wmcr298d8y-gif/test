@@ -547,6 +547,11 @@ test('syncCarryOver: 途中・未着手は明日の予定へ自動で入れ、�
   r.tasks[0].status = 'done';
   Core.syncCarryOver(r);
   assert.deepEqual(r.tomorrow.map((p) => p.work), ['器具搬入']);
+  // 予定から外した作業は、途中に戻しても自動では入れない
+  r.tasks[0].status = 'partial';
+  r.tasks[0].skipCarry = true;
+  Core.syncCarryOver(r);
+  assert.deepEqual(r.tomorrow.map((p) => p.work), ['器具搬入']);
   // 手書きの予定と同じ作業は二重に入れない
   r.tasks.push({ id: 'd', place: '1F', work: '器具搬入', workTypeId: '', status: 'notyet', memo: '' });
   Core.syncCarryOver(r);

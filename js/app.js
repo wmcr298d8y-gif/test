@@ -235,14 +235,16 @@
     state.settings.role = b.dataset.role;
     save();
     applyRole();
-    // 未保存の日報は破棄済み。選べる現場が変わるので読み直す
+    // 未保存の内容は破棄済み。選べる現場が変わるので読み直す
     sheet.dirty = false;
-    loadSheet(sheet.date, sheet.siteId || defaultSiteId());
+    report.dirty = false;
+    loadContext(sheet.date, sheet.siteId || defaultSiteId());
     showTab($('.tabs [aria-selected=true]').hidden ? 'entry' : currentTab());
   }));
 
   // ---------- タブ ----------
   function showTab(name) {
+    if (name !== 'site') editingNote = false;
     $$('.tabs [role=tab]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === name)));
     $$('.panel').forEach((p) => { p.hidden = p.id !== 'tab-' + name; });
     render();
@@ -345,8 +347,15 @@
 
   /** 保存していない変更がある場合は破棄してよいか確認する */
   async function confirmDiscard() {
-    if (!sheet.dirty) return true;
-    return askConfirm('保存していない変更があります。破棄して移動しますか？', { ok: '破棄する', danger: true });
+    if (!sheet.dirty && !report.dirty) return true;
+    const which = [report.dirty ? '日報' : '', sheet.dirty ? '工数' : ''].filter(Boolean).join('と');
+    return askConfirm(`${which}に保存していない変更があります。破棄して移動しますか？`, { ok: '破棄する', danger: true });
+  }
+
+  /** 日付・現場を切り替えて、日報と工数の両方を読み直す */
+  function loadContext(date, siteId) {
+    loadSheet(date, siteId);
+    loadReport(sheet.date, sheet.siteId);
   }
 
   /** 入力画面で選べる現場（現場用は稼働中のみ、管理者は完工済みも表示・閲覧できる） */
@@ -368,7 +377,7 @@
   }
 
   function openToday() {
-    loadSheet(toISODate(new Date()), defaultSiteId());
+    loadContext(toISODate(new Date()), defaultSiteId());
   }
 
   function workTypeOptions(categoryId, selected) {
@@ -427,9 +436,28 @@
     updateSheetTotal();
   }
 
+  /** 日報の出面に対して、工数をどれだけ割り振ったか（出面 1 人 = 1 人工として比べる） */
+  function renderCrewBanner(totalHours) {
+    const rep = Core.findReport(state, sheet.date, sheet.siteId);
+    const el = $('#entry-crew');
+    if (!sheet.siteId) { el.innerHTML = ''; return; }
+    const md = Core.round2(totalHours / perDay());
+    if (!rep) {
+      el.innerHTML = `<span class="muted">この日の日報はまだありません。先に「日報」タブで出面を入力すると、割り振りの残りが分かります。</span>`;
+      return;
+    }
+    const crew = Core.crewTotal(rep);
+    const rest = Core.round2(crew - md);
+    const withType = rep.tasks.filter((t) => t.workTypeId && !sheet.rows.some((r) => r.workTypeId === t.workTypeId));
+    el.innerHTML = `<div>日報の出面 <strong>${crew} 人</strong> のうち、工数に割り振り済み <strong>${fmt(md)} 人工</strong>
+      ${rest > 0 ? `<span class="pill active">残り ${fmt(rest)} 人工</span>` : rest < 0 ? `<span class="pill hard">出面より ${fmt(-rest)} 人工多い</span>` : '<span class="pill active">割り振り完了</span>'}</div>` +
+      (withType.length ? `<button type="button" id="rows-from-report">日報の作業から工種を取り込む（${withType.length} 件）</button>` : '');
+  }
+
   function updateSheetTotal() {
     const filled = sheet.rows.filter((r) => !Core.isEmptyRow(r));
     const total = Core.round2(filled.reduce((s, r) => s + rowManHours(r), 0));
+    renderCrewBanner(total);
     $('#sheet-total').innerHTML = `<strong>${fmt(total)} h</strong>（${fmt(Core.round2(total / perDay()))} 人工）・${filled.length} 作業` +
       (sheet.dirty ? ' <span class="unsaved">未保存</span>' : '');
     $('#save-sheet').disabled = !sheet.dirty || Core.isSiteDone(state, sheet.siteId);
@@ -437,14 +465,14 @@
 
   /** 同じ日に記録のある現場（切り替え用） */
   function renderDaySites() {
-    const byDay = state.entries.filter((e) => e.date === sheet.date);
-    const totals = new Map();
-    for (const e of byDay) totals.set(e.siteId, (totals.get(e.siteId) || 0) + Core.entryManHours(e));
+    // 同じ日に日報のある現場（出面の人数を表示）
+    const reports = state.reports.filter((r) => r.date === sheet.date);
     const allowed = new Set(entrySites().map((x) => x.id));
-    const sites = state.sites.filter((x) => totals.has(x.id) && x.id !== sheet.siteId && allowed.has(x.id));
+    const sites = reports.filter((r) => r.siteId !== sheet.siteId && allowed.has(r.siteId))
+      .map((r) => ({ site: state.sites.find((x) => x.id === r.siteId), crew: Core.crewTotal(r) })).filter((x) => x.site);
     $('#day-sites').innerHTML = sites.length
-      ? `<span class="muted small">${formatDate(sheet.date)} の他の現場:</span> ` + sites.map((x) =>
-        `<button type="button" class="chip" data-goto-site="${escapeHtml(x.id)}">${escapeHtml(x.name)} ${fmt(Core.round2(totals.get(x.id)))}h</button>`).join('')
+      ? `<span class="muted small">${formatDate(sheet.date)} の他の現場:</span> ` + sites.map(({ site, crew }) =>
+        `<button type="button" class="chip" data-goto-site="${escapeHtml(site.id)}">${escapeHtml(site.name)} ${crew}人</button>`).join('')
       : '';
   }
 
@@ -558,6 +586,22 @@
     if (act === 'dup') $(`.work-row[data-key="${sheet.rows[i + 1].key}"] [data-f=workTypeId]`).focus();
   });
 
+  // 日報で工種を付けた作業を、工数の行として取り込む
+  $('#entry-crew').addEventListener('click', (ev) => {
+    if (!ev.target.closest('#rows-from-report')) return;
+    const rep = Core.findReport(state, sheet.date, sheet.siteId);
+    if (!rep) return;
+    sheet.rows = sheet.rows.filter((r) => !Core.isEmptyRow(r));
+    for (const t of rep.tasks) {
+      if (!t.workTypeId || sheet.rows.some((r) => r.workTypeId === t.workTypeId)) continue;
+      sheet.rows.push(makeRow({ workTypeId: t.workTypeId, people: 1, hours: 8, note: t.place }));
+    }
+    if (!sheet.rows.length) sheet.rows.push(newRowLike(null));
+    markDirty();
+    renderSheet();
+    toast('日報の作業を取り込みました。人数と時間を確認して保存してください');
+  });
+
   $('#add-row').addEventListener('click', () => {
     const r = newRowLike(sheet.rows[sheet.rows.length - 1]);
     sheet.rows.push(r);
@@ -584,24 +628,24 @@
     // 入力者はこの端末で覚えておく（次回から選び直さなくてよい）
     state.settings.lastEmployeeId = ev.target.value;
     save();
-    if (!sheet.dirty && !sheet.siteId) loadSheet(sheet.date, defaultSiteId());
+    if (!sheet.dirty && !report.dirty && !sheet.siteId) loadContext(sheet.date, defaultSiteId());
     $('#form-errors').innerHTML = '';
   });
 
   form.elements.date.addEventListener('change', async (ev) => {
     if (!await confirmDiscard()) { ev.target.value = sheet.date; return; }
-    loadSheet(ev.target.value, sheet.siteId);
+    loadContext(ev.target.value, sheet.siteId);
   });
 
   form.elements.siteId.addEventListener('change', async (ev) => {
     if (!await confirmDiscard()) { ev.target.value = sheet.siteId; return; }
-    loadSheet(sheet.date, ev.target.value);
+    loadContext(sheet.date, ev.target.value);
   });
 
   $('#day-sites').addEventListener('click', async (ev) => {
     const b = ev.target.closest('[data-goto-site]');
     if (!b || !await confirmDiscard()) return;
-    loadSheet(sheet.date, b.dataset.gotoSite);
+    loadContext(sheet.date, b.dataset.gotoSite);
   });
 
   form.addEventListener('submit', (ev) => {
@@ -634,7 +678,7 @@
     if (!e) return;
     if (!(sheet.date === e.date && sheet.siteId === e.siteId) && !await confirmDiscard()) return;
     showTab('entry');
-    if (!(sheet.date === e.date && sheet.siteId === e.siteId && sheet.dirty)) loadSheet(e.date, e.siteId);
+    if (!(sheet.date === e.date && sheet.siteId === e.siteId && sheet.dirty)) loadContext(e.date, e.siteId);
     const r = sheet.rows.find((x) => x.id === id);
     const box = r && $(`.work-row[data-key="${r.key}"]`);
     if (box) {
@@ -651,7 +695,7 @@
     const today = toISODate(new Date());
     if (!(sheet.date === today && sheet.siteId === e.siteId) && !await confirmDiscard()) return;
     showTab('entry');
-    if (!(sheet.date === today && sheet.siteId === e.siteId)) loadSheet(today, e.siteId);
+    if (!(sheet.date === today && sheet.siteId === e.siteId)) loadContext(today, e.siteId);
     sheet.rows = sheet.rows.filter((r) => !Core.isEmptyRow(r));
     sheet.rows.push(makeRow({ ...e, id: '', quantity: '', note: '' }));
     markDirty();
@@ -673,6 +717,519 @@
     render();
     toast('削除しました');
   }
+
+  // ---------- 日報（必須） ----------
+  const reportForm = $('#report-form');
+  let report = { data: Core.normalizeReport({}), saved: false, fromDate: null, dirty: false };
+  const TASK_STATUS_ORDER = ['done', 'partial', 'notyet'];
+
+  function loadReport(date, siteId) {
+    const d = siteId ? Core.draftReport(state, date, siteId) : { report: Core.normalizeReport({ date, siteId }), saved: false, fromDate: null };
+    report = { data: d.report, saved: d.saved, fromDate: d.fromDate, dirty: false };
+    if (!report.data.tasks.length) report.data.tasks.push(newTask());
+    if (!report.data.tomorrow.length) report.data.tomorrow.push(newPlan());
+    $('#rp-errors').innerHTML = '';
+    renderReport();
+  }
+
+  function newTask() {
+    return { id: Core.newId(), place: '', work: '', workTypeId: '', status: 'done', memo: '' };
+  }
+
+  function newPlan() {
+    return { id: Core.newId(), place: '', work: '', workTypeId: '', fromTaskId: '' };
+  }
+
+  function markReportDirty() {
+    report.dirty = true;
+    updateReportStatus();
+  }
+
+  /** 工種（任意）の選択肢。大分類ごとにまとめる */
+  function workTypeOptionsAll(selected) {
+    return '<option value="">工種（任意）</option>' + state.categories.map((c) => {
+      const items = Core.workTypesOfCategory(state, c.id);
+      return items.length ? `<optgroup label="${escapeHtml(c.name)}">${items.map((w) =>
+        `<option value="${escapeHtml(w.id)}" ${w.id === selected ? 'selected' : ''}>${escapeHtml(w.name)}</option>`).join('')}</optgroup>` : '';
+    }).join('');
+  }
+
+  function taskHtml(t, i) {
+    const id = (f) => `task-${t.id}-${f}`;
+    const showMemo = t.status !== 'done' || t.memo;
+    return `<div class="task status-${t.status}" data-task="${escapeHtml(t.id)}">
+      <div class="task-head">
+        <div class="task-status" role="group" aria-label="作業 ${i + 1} の状態">
+          ${TASK_STATUS_ORDER.map((st) => `<button type="button" data-status="${st}" aria-pressed="${t.status === st}">${Core.TASK_STATUS[st]}</button>`).join('')}
+        </div>
+        <button type="button" class="task-del danger" data-del-task aria-label="作業 ${i + 1} を削除">削除</button>
+      </div>
+      <div class="task-fields">
+        <input id="${id('place')}" data-tf="place" type="text" value="${escapeHtml(t.place)}" placeholder="場所（例: 2F 西側）" aria-label="作業 ${i + 1} の場所">
+        <input id="${id('work')}" data-tf="work" type="text" value="${escapeHtml(t.work)}" placeholder="作業（例: 天井内配管）" aria-label="作業 ${i + 1} の内容">
+      </div>
+      <input id="${id('memo')}" class="task-memo" data-tf="memo" type="text" value="${escapeHtml(t.memo)}" ${showMemo ? '' : 'hidden'}
+        placeholder="どこまで進んだか（例: 盤 2 面のうち 1 面済み）" aria-label="作業 ${i + 1} の進み具合">
+      <select id="${id('wt')}" class="task-wt" data-tf="workTypeId" aria-label="作業 ${i + 1} の工種（任意）">${workTypeOptionsAll(t.workTypeId)}</select>
+    </div>`;
+  }
+
+  function planHtml(p, i) {
+    const id = (f) => `plan-${p.id}-${f}`;
+    return `<div class="task plan" data-plan="${escapeHtml(p.id)}">
+      <div class="task-head">
+        ${p.fromTaskId ? '<span class="pill active">今日から持ち越し</span>' : `<span class="muted small">予定 ${i + 1}</span>`}
+        <button type="button" class="task-del danger" data-del-plan aria-label="予定 ${i + 1} を削除">削除</button>
+      </div>
+      <div class="task-fields">
+        <input id="${id('place')}" data-pf="place" type="text" value="${escapeHtml(p.place)}" placeholder="場所" aria-label="予定 ${i + 1} の場所">
+        <input id="${id('work')}" data-pf="work" type="text" value="${escapeHtml(p.work)}" placeholder="作業" aria-label="予定 ${i + 1} の内容">
+      </div>
+      <select id="${id('wt')}" class="task-wt" data-pf="workTypeId" aria-label="予定 ${i + 1} の工種（任意）">${workTypeOptionsAll(p.workTypeId)}</select>
+    </div>`;
+  }
+
+  function crewHtml() {
+    const c = report.data.crew;
+    const stepper = (key, value, label) => `<div class="stepper" data-crew-stepper="${key}">
+        <button type="button" data-crew-step="-1" aria-label="${label}を減らす">▼</button>
+        <input type="number" min="0" max="999" step="1" inputmode="numeric" data-crew-people="${key}" value="${escapeHtml(value)}" aria-label="${label}">
+        <button type="button" data-crew-step="1" aria-label="${label}を増やす">▲</button>
+      </div>`;
+    return `<div class="crew-row"><span class="crew-name">自社</span>${stepper('own', c.own, '自社の人数')}<span class="crew-unit">人</span><span></span></div>` +
+      c.subs.map((x, i) => `<div class="crew-row" data-sub="${i}">
+        <input type="text" class="crew-name-input" data-sub-name="${i}" value="${escapeHtml(x.name)}" list="sub-names" placeholder="協力会社名" aria-label="協力会社 ${i + 1} の名前">
+        ${stepper('sub-' + i, x.people, `協力会社 ${i + 1} の人数`)}<span class="crew-unit">人</span>
+        <button type="button" class="task-del danger" data-del-sub="${i}" aria-label="協力会社 ${i + 1} を削除">×</button>
+      </div>`).join('') +
+      `<p class="crew-total">合計 <strong>${Core.crewTotal(report.data)} 人</strong></p>`;
+  }
+
+  function renderReport() {
+    const d = report.data;
+    const site = state.sites.find((x) => x.id === d.siteId);
+    const done = !!site && site.status === 'done';
+    $('#rp-fields').disabled = done || !d.siteId;
+    $('#rp-lock').hidden = !done;
+    if (done) $('#rp-lock').textContent = `この現場は完工済みです（完工日 ${site.completedOn ? formatDate(site.completedOn) : '未設定'}）。表示のみで、入力・修正はできません。`;
+    const rp = Core.findReport(state, d.date, d.siteId);
+    $('#rp-origin').innerHTML = !d.siteId ? '<span class="muted">現場を選ぶと、その現場の日報を入力できます。</span>'
+      : report.saved ? `<span class="pill active">保存済み</span> ${rp && rp.inputBy ? `入力 ${escapeHtml(Core.nameLookup(state).employee(rp.inputBy))}` : ''}${rp && rp.updatedAt ? `・最終更新 ${new Date(rp.updatedAt).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}` : ''}`
+        : report.fromDate ? `<span class="pill kind">下書き</span> ${formatDate(report.fromDate)} の日報の「明日の予定」と持ち越しの作業から作りました。やったことに合わせて直してください。`
+          : '<span class="pill kind">新規</span> この現場の最初の日報です。';
+    $('#rp-weather').innerHTML = Core.WEATHERS.map((w) =>
+      `<button type="button" data-weather="${w}" aria-pressed="${d.weather === w}">${w}</button>`).join('');
+    $('#rp-crew').innerHTML = crewHtml();
+    $('#rp-tasks').innerHTML = d.tasks.map(taskHtml).join('');
+    $('#rp-plans').innerHTML = d.tomorrow.map(planHtml).join('');
+    $('#rp-notes').value = d.notes;
+    renderPhotos();
+    $('#sub-names').innerHTML = Core.subcontractorNames(state).map((n) => `<option value="${escapeHtml(n)}">`).join('');
+    updateReportStatus();
+  }
+
+  function updateReportStatus() {
+    const d = report.data;
+    const tasks = d.tasks.filter((t) => t.place.trim() || t.work.trim());
+    const count = (st) => tasks.filter((t) => t.status === st).length;
+    $('#rp-status').innerHTML = `出面 <strong>${Core.crewTotal(d)} 人</strong>・作業 ${tasks.length}` +
+      (tasks.length ? `<span class="muted small">（完了 ${count('done')}・途中 ${count('partial')}・未着手 ${count('notyet')}）</span>` : '') +
+      (report.dirty ? ' <span class="unsaved">未保存</span>' : '');
+    $('#rp-save').disabled = !report.dirty || Core.isSiteDone(state, d.siteId) || !d.siteId;
+    const crewTotal = $('#rp-crew .crew-total strong');
+    if (crewTotal) crewTotal.textContent = `${Core.crewTotal(d)} 人`;
+  }
+
+  /** 途中・未着手の作業を明日の予定へ反映し、予定の欄を描き直す（入力中の欄のフォーカスは保つ） */
+  function refreshPlans() {
+    const before = report.data.tomorrow.map((p) => `${p.id}:${p.place}|${p.work}|${p.workTypeId}`).join();
+    Core.syncCarryOver(report.data);
+    // 入力欄として置いていた空の予定は、ほかの予定が入ったら外す
+    const isBlankPlan = (p) => !p.place.trim() && !p.work.trim() && !p.fromTaskId;
+    if (report.data.tomorrow.some((p) => !isBlankPlan(p))) report.data.tomorrow = report.data.tomorrow.filter((p) => !isBlankPlan(p));
+    if (!report.data.tomorrow.length) report.data.tomorrow.push(newPlan());
+    const after = report.data.tomorrow.map((p) => `${p.id}:${p.place}|${p.work}|${p.workTypeId}`).join();
+    if (before !== after) $('#rp-plans').innerHTML = report.data.tomorrow.map(planHtml).join('');
+  }
+
+  const taskOf = (el) => { const box = el.closest('[data-task]'); return box && report.data.tasks.find((t) => t.id === box.dataset.task); };
+  const planOf = (el) => { const box = el.closest('[data-plan]'); return box && report.data.tomorrow.find((p) => p.id === box.dataset.plan); };
+
+  $('#rp-weather').addEventListener('click', (ev) => {
+    const b = ev.target.closest('[data-weather]');
+    if (!b) return;
+    report.data.weather = report.data.weather === b.dataset.weather ? '' : b.dataset.weather;
+    $$('#rp-weather [data-weather]').forEach((x) => x.setAttribute('aria-pressed', String(x.dataset.weather === report.data.weather)));
+    markReportDirty();
+  });
+
+  // 出面
+  function setCrewPeople(key, value) {
+    const v = Math.max(0, Math.min(999, Math.round(Number(value) || 0)));
+    if (key === 'own') report.data.crew.own = v;
+    else report.data.crew.subs[Number(key.slice(4))].people = v;
+    return v;
+  }
+  $('#rp-crew').addEventListener('click', (ev) => {
+    const step = ev.target.closest('[data-crew-step]');
+    if (step) {
+      const box = step.closest('[data-crew-stepper]');
+      const input = box.querySelector('input');
+      input.value = setCrewPeople(box.dataset.crewStepper, (Number(input.value) || 0) + Number(step.dataset.crewStep));
+      markReportDirty();
+      return;
+    }
+    const del = ev.target.closest('[data-del-sub]');
+    if (del) {
+      report.data.crew.subs.splice(Number(del.dataset.delSub), 1);
+      $('#rp-crew').innerHTML = crewHtml();
+      markReportDirty();
+    }
+  });
+  $('#rp-crew').addEventListener('input', (ev) => {
+    const people = ev.target.dataset.crewPeople;
+    if (people) setCrewPeople(people, ev.target.value);
+    const name = ev.target.dataset.subName;
+    if (name !== undefined) report.data.crew.subs[Number(name)].name = ev.target.value;
+    markReportDirty();
+  });
+  $('#rp-add-sub').addEventListener('click', () => {
+    report.data.crew.subs.push({ name: '', people: 1 });
+    $('#rp-crew').innerHTML = crewHtml();
+    $$('#rp-crew [data-sub-name]').pop().focus();
+    markReportDirty();
+  });
+
+  // 今日の作業
+  $('#rp-tasks').addEventListener('click', (ev) => {
+    const t = taskOf(ev.target);
+    if (!t) return;
+    const st = ev.target.closest('[data-status]');
+    if (st) {
+      t.status = st.dataset.status;
+      const box = ev.target.closest('[data-task]');
+      box.className = `task status-${t.status}`;
+      box.querySelectorAll('[data-status]').forEach((x) => x.setAttribute('aria-pressed', String(x.dataset.status === t.status)));
+      const memo = box.querySelector('[data-tf=memo]');
+      memo.hidden = t.status === 'done' && !t.memo;
+      if (t.status !== 'done') memo.focus();
+      refreshPlans();
+      markReportDirty();
+      return;
+    }
+    if (ev.target.closest('[data-del-task]')) {
+      report.data.tasks = report.data.tasks.filter((x) => x !== t);
+      if (!report.data.tasks.length) report.data.tasks.push(newTask());
+      $('#rp-tasks').innerHTML = report.data.tasks.map(taskHtml).join('');
+      refreshPlans();
+      markReportDirty();
+    }
+  });
+  $('#rp-tasks').addEventListener('input', (ev) => {
+    const t = taskOf(ev.target);
+    const f = ev.target.dataset.tf;
+    if (!t || !f) return;
+    t[f] = ev.target.value;
+    markReportDirty();
+  });
+  // 場所・作業の入力を終えたら持ち越しの予定に反映（入力のたびに予定欄を描き直さない）
+  $('#rp-tasks').addEventListener('change', (ev) => {
+    if (!taskOf(ev.target)) return;
+    const t = taskOf(ev.target);
+    t[ev.target.dataset.tf] = ev.target.value;
+    refreshPlans();
+    markReportDirty();
+  });
+  $('#rp-add-task').addEventListener('click', () => {
+    const t = newTask();
+    report.data.tasks.push(t);
+    $('#rp-tasks').insertAdjacentHTML('beforeend', taskHtml(t, report.data.tasks.length - 1));
+    $(`[data-task="${t.id}"] [data-tf=place]`).focus();
+    markReportDirty();
+  });
+
+  // 明日の予定
+  $('#rp-plans').addEventListener('click', (ev) => {
+    if (!ev.target.closest('[data-del-plan]')) return;
+    const p = planOf(ev.target);
+    report.data.tomorrow = report.data.tomorrow.filter((x) => x !== p);
+    // 持ち越しの予定を消した場合は、その作業を「完了」扱いにはせず、予定だけ外す
+    if (p && p.fromTaskId) {
+      const t = report.data.tasks.find((x) => x.id === p.fromTaskId);
+      if (t) t.skipCarry = true;
+    }
+    if (!report.data.tomorrow.length) report.data.tomorrow.push(newPlan());
+    $('#rp-plans').innerHTML = report.data.tomorrow.map(planHtml).join('');
+    markReportDirty();
+  });
+  $('#rp-plans').addEventListener('input', (ev) => {
+    const p = planOf(ev.target);
+    const f = ev.target.dataset.pf;
+    if (!p || !f) return;
+    p[f] = ev.target.value;
+    // 手で直した予定は、今日の作業との連動をやめる
+    p.fromTaskId = '';
+    markReportDirty();
+  });
+  $('#rp-plans').addEventListener('change', (ev) => {
+    const p = planOf(ev.target);
+    if (p && ev.target.dataset.pf === 'workTypeId') { p.workTypeId = ev.target.value; markReportDirty(); }
+  });
+  $('#rp-add-plan').addEventListener('click', () => {
+    const p = newPlan();
+    report.data.tomorrow.push(p);
+    $('#rp-plans').insertAdjacentHTML('beforeend', planHtml(p, report.data.tomorrow.length - 1));
+    $(`[data-plan="${p.id}"] [data-pf=place]`).focus();
+    markReportDirty();
+  });
+
+  $('#rp-notes').addEventListener('input', (ev) => { report.data.notes = ev.target.value; markReportDirty(); });
+
+  // 写真（任意）。端末の容量を圧迫しないよう、長辺 1280px の JPEG に縮小して保存する
+  const MAX_PHOTOS = 4;
+  function resizeImage(file, maxSide = 1280, quality = 0.7) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+        URL.revokeObjectURL(url);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('画像を読み込めませんでした')); };
+      img.src = url;
+    });
+  }
+
+  function renderPhotos() {
+    $('#rp-photos').innerHTML = report.data.photos.map((ph, i) => `<figure class="photo">
+        <img src="${escapeHtml(ph.dataUrl)}" alt="${escapeHtml(ph.caption || `写真 ${i + 1}`)}">
+        <input type="text" data-photo-caption="${i}" value="${escapeHtml(ph.caption || '')}" placeholder="説明（例: 2F 西側 配管の終わり位置）" aria-label="写真 ${i + 1} の説明">
+        <button type="button" class="task-del danger" data-del-photo="${i}" aria-label="写真 ${i + 1} を削除">×</button>
+      </figure>`).join('');
+  }
+
+  $('#rp-photo-input').addEventListener('change', async (ev) => {
+    const files = [...ev.target.files];
+    ev.target.value = '';
+    for (const f of files) {
+      if (report.data.photos.length >= MAX_PHOTOS) { toast(`写真は 1 日 ${MAX_PHOTOS} 枚までです`); break; }
+      try {
+        report.data.photos.push({ id: Core.newId(), dataUrl: await resizeImage(f), caption: '' });
+      } catch (e) {
+        toast(e.message);
+      }
+    }
+    renderPhotos();
+    markReportDirty();
+  });
+  $('#rp-photos').addEventListener('input', (ev) => {
+    const i = ev.target.dataset.photoCaption;
+    if (i === undefined) return;
+    report.data.photos[Number(i)].caption = ev.target.value;
+    markReportDirty();
+  });
+  $('#rp-photos').addEventListener('click', (ev) => {
+    const del = ev.target.closest('[data-del-photo]');
+    if (del) {
+      report.data.photos.splice(Number(del.dataset.delPhoto), 1);
+      renderPhotos();
+      markReportDirty();
+      return;
+    }
+    const img = ev.target.closest('img');
+    if (img) img.closest('figure').classList.toggle('expanded');
+  });
+
+  reportForm.addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    const d = report.data;
+    d.inputBy = form.elements.inputBy.value || d.inputBy;
+    const res = Core.saveReport(state, d, Date.now(), { requireInputBy: state.employees.length > 0 });
+    $('#rp-errors').innerHTML = res.errors.map((e) => `<li>${escapeHtml(e)}</li>`).join('');
+    if (res.errors.length) {
+      $('#rp-errors').scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+    state.settings.lastSiteId = d.siteId;
+    save();
+    loadReport(d.date, d.siteId);
+    renderDaySites();
+    renderCrewBanner(sheet.rows.filter((r) => !Core.isEmptyRow(r)).reduce((sum, r) => sum + rowManHours(r), 0));
+    toast('日報を保存しました');
+  });
+
+  // ---------- 現場（引き継ぎ） ----------
+  let historyLimit = 5;
+  let editingNote = false;
+
+  function contextSite() {
+    return state.sites.find((x) => x.id === sheet.siteId) || null;
+  }
+
+  function reportHtml(r, names) {
+    const tasks = r.tasks.map((t) => `<li class="status-${t.status}">
+        <span class="pill st-${t.status}">${Core.TASK_STATUS[t.status]}</span>
+        ${escapeHtml([t.place, t.work].filter(Boolean).join(' '))}${t.memo ? `<span class="muted"> … ${escapeHtml(t.memo)}</span>` : ''}</li>`).join('');
+    const plans = r.tomorrow.map((p) => `<li>${escapeHtml([p.place, p.work].filter(Boolean).join(' '))}</li>`).join('');
+    const subs = r.crew.subs.map((x) => `${escapeHtml(x.name)} ${x.people}人`).join('、');
+    return `<details class="report-card">
+      <summary>
+        <strong>${formatDate(r.date)}</strong>
+        ${r.weather ? `<span class="pill kind">${escapeHtml(r.weather)}</span>` : ''}
+        <span class="muted">出面 ${Core.crewTotal(r)}人・作業 ${r.tasks.length}${r.photos.length ? `・写真 ${r.photos.length}` : ''}</span>
+        ${r.inputBy ? `<span class="muted small">入力 ${escapeHtml(names.employee(r.inputBy))}</span>` : ''}
+      </summary>
+      <div class="report-body">
+        <p class="small">出面: 自社 ${r.crew.own}人${subs ? `、${subs}` : ''}</p>
+        <h3>作業</h3><ul class="todo">${tasks || '<li class="muted">なし</li>'}</ul>
+        <h3>翌日の予定</h3><ul class="todo">${plans || '<li class="muted">なし</li>'}</ul>
+        ${r.notes ? `<h3>特記事項</h3><p class="pre">${escapeHtml(r.notes)}</p>` : ''}
+        ${r.photos.length ? `<div class="photos">${r.photos.map((ph) => `<figure class="photo"><img src="${escapeHtml(ph.dataUrl)}" alt="${escapeHtml(ph.caption || '現場写真')}">${ph.caption ? `<figcaption>${escapeHtml(ph.caption)}</figcaption>` : ''}</figure>`).join('')}</div>` : ''}
+      </div>
+    </details>`;
+  }
+
+  function renderSiteView() {
+    const site = contextSite();
+    const blocks = $$('#tab-site .sv-block');
+    if (!site) {
+      $('#sv-head').innerHTML = '<p class="muted">上の「現場」を選んでください。</p>';
+      blocks.forEach((b) => { b.hidden = true; });
+      return;
+    }
+    blocks.forEach((b) => { b.hidden = false; });
+    const names = Core.nameLookup(state);
+    const kind = state.siteKinds.find((k) => k.id === site.kindId);
+    $('#sv-head').innerHTML = `<h2 class="sv-title">${escapeHtml(Core.siteLabel(site))}</h2>
+      <p>${site.status === 'done' ? '<span class="pill done">完工</span>' : '<span class="pill active">稼働中</span>'}
+      ${kind ? `<span class="pill kind">${escapeHtml(kind.name)}</span>` : ''}</p>`;
+
+    // 現場ノート
+    const nb = site.notebook || {};
+    const filled = Core.NOTEBOOK_FIELDS.filter(([k]) => nb[k]);
+    $('#sv-note').innerHTML = filled.length
+      ? filled.map(([k, label]) => `<dt>${escapeHtml(label)}</dt><dd class="pre">${escapeHtml(nb[k])}</dd>`).join('') +
+        (nb.updatedAt ? `<dt class="muted small">最終更新</dt><dd class="muted small">${formatDateLong(nb.updatedAt.slice(0, 10))}${nb.updatedBy ? `（${escapeHtml(names.employee(nb.updatedBy))}）` : ''}</dd>` : '')
+      : '<p class="muted">まだ書かれていません。「編集」から、代わりの人が最初に知りたいこと（連絡先・ルール・鍵や資材の場所など）を書いてください。</p>';
+    $('#sv-note').hidden = editingNote;
+    $('#sv-note-form').hidden = !editingNote;
+    $('#sv-edit-note').hidden = editingNote || site.status === 'done';
+
+    // 今日やること（保存済みの日報、なければ下書き＝前日の予定と持ち越し）
+    const d = Core.draftReport(state, sheet.date, site.id);
+    const isToday = sheet.date === toISODate(new Date());
+    $('#sv-today-title').textContent = `${isToday ? '今日' : formatDate(sheet.date)}やること`;
+    const todo = d.report.tasks.filter((t) => t.place || t.work);
+    $('#sv-today-src').textContent = d.saved ? 'この日の日報（保存済み）の作業です。'
+      : d.fromDate ? `${formatDate(d.fromDate)} の日報の「明日の予定」と、終わっていない作業です。` : 'まだ日報がありません。';
+    $('#sv-today').innerHTML = todo.length ? todo.map((t) => `<li class="status-${t.status}">
+        ${d.saved ? `<span class="pill st-${t.status}">${Core.TASK_STATUS[t.status]}</span>` : '<span class="todo-box" aria-hidden="true"></span>'}
+        <span>${escapeHtml([t.place, t.work].filter(Boolean).join(' '))}${t.memo ? `<span class="muted"> … ${escapeHtml(t.memo)}</span>` : ''}</span>
+      </li>`).join('') : '<li class="muted">なし</li>';
+
+    // 近日の予定
+    const events = Core.upcomingEvents(state, site.id, sheet.date);
+    $('#sv-events').innerHTML = events.length ? events.map((e) => `<li>
+        <span class="event-date">${formatDate(e.date)}</span><span>${escapeHtml(e.title)}</span>
+        <button type="button" class="task-del danger" data-del-event="${escapeHtml(e.id)}" aria-label="予定「${escapeHtml(e.title)}」を削除">×</button>
+      </li>`).join('') : '<li class="muted">登録された予定はありません</li>';
+    $('#sv-event-form').hidden = site.status === 'done';
+
+    // これまでの日報
+    const reports = Core.reportsOfSite(state, site.id).filter((r) => r.date <= sheet.date);
+    $('#sv-reports').innerHTML = reports.length ? reports.slice(0, historyLimit).map((r) => reportHtml(r, names)).join('') : '<p class="muted">日報はまだありません</p>';
+    const first = $('#sv-reports details');
+    if (first) first.open = true;
+    $('#sv-more').hidden = reports.length <= historyLimit;
+  }
+
+  function openNoteEditor() {
+    const site = contextSite();
+    if (!site) return;
+    const nb = site.notebook || {};
+    $('#sv-note-form').innerHTML = Core.NOTEBOOK_FIELDS.map(([k, label]) => `<div class="field">
+        <label for="nb-${k}">${escapeHtml(label)}</label>
+        <textarea id="nb-${k}" name="${k}" rows="2">${escapeHtml(nb[k] || '')}</textarea>
+      </div>`).join('') +
+      `<div class="actions"><button type="submit" class="primary">現場ノートを保存</button><button type="button" id="sv-note-cancel">やめる</button></div>`;
+    editingNote = true;
+    renderSiteView();
+    $('#sv-note-form textarea').focus();
+  }
+
+  $('#sv-edit-note').addEventListener('click', openNoteEditor);
+  $('#sv-note-form').addEventListener('click', (ev) => {
+    if (!ev.target.closest('#sv-note-cancel')) return;
+    editingNote = false;
+    renderSiteView();
+  });
+  $('#sv-note-form').addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    const site = contextSite();
+    if (!site) return;
+    const nb = {};
+    for (const [k] of Core.NOTEBOOK_FIELDS) nb[k] = ev.target.elements[k].value.trim();
+    nb.updatedAt = new Date().toISOString();
+    nb.updatedBy = form.elements.inputBy.value || '';
+    site.notebook = nb;
+    save();
+    editingNote = false;
+    renderSiteView();
+    toast('現場ノートを保存しました');
+  });
+  $('#sv-event-form').addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    const site = contextSite();
+    const f = ev.target.elements;
+    if (!site || !f.date.value || !f.title.value.trim()) return;
+    state.events.push({ id: Core.newId(), siteId: site.id, date: f.date.value, title: f.title.value.trim() });
+    save();
+    ev.target.reset();
+    renderSiteView();
+    toast('予定を追加しました');
+  });
+  $('#sv-events').addEventListener('click', async (ev) => {
+    const b = ev.target.closest('[data-del-event]');
+    if (!b) return;
+    const e = state.events.find((x) => x.id === b.dataset.delEvent);
+    if (!e || !await askConfirm(`予定「${e.title}」を削除しますか？`, { ok: '削除する', danger: true })) return;
+    state.events = state.events.filter((x) => x !== e);
+    save();
+    renderSiteView();
+  });
+  $('#sv-more').addEventListener('click', () => { historyLimit += 10; renderSiteView(); });
+
+  // ---------- 集計: 日報の提出状況 ----------
+  function renderSubmission() {
+    const today = new Date();
+    const dates = [];
+    for (let i = 6; i >= 0; i--) { const d = new Date(today); d.setDate(d.getDate() - i); dates.push(toISODate(d)); }
+    const sites = state.sites.filter((x) => x.status !== 'done');
+    if (!sites.length) { $('#summary-submission').innerHTML = '<p class="muted">稼働中の現場がありません</p>'; return; }
+    const sub = Core.reportSubmission(state, dates);
+    const holiday = (iso) => [0, 6].includes(new Date(iso + 'T00:00:00').getDay());
+    $('#summary-submission').innerHTML = `<table class="pivot submission">
+      <thead><tr><th>現場</th>${dates.map((d) => `<th class="num ${holiday(d) ? 'holiday' : ''}">${formatDate(d)}</th>`).join('')}</tr></thead>
+      <tbody>${sites.map((x) => `<tr><th>${escapeHtml(Core.siteLabel(x))}</th>${dates.map((d) => {
+        const ok = sub.get(x.id) && sub.get(x.id).has(d);
+        return `<td class="num ${holiday(d) ? 'holiday' : ''}"><button type="button" class="sub-cell ${ok ? 'ok' : 'ng'}" data-open-report="${escapeHtml(x.id)}|${d}"
+          aria-label="${escapeHtml(x.name)} ${formatDate(d)} ${ok ? '提出済み' : '未提出'}">${ok ? '✓' : holiday(d) ? '' : '未'}</button></td>`;
+      }).join('')}</tr>`).join('')}</tbody>
+    </table>`;
+  }
+
+  $('#summary-submission').addEventListener('click', async (ev) => {
+    const b = ev.target.closest('[data-open-report]');
+    if (!b || !await confirmDiscard()) return;
+    const [siteId, date] = b.dataset.openReport.split('|');
+    loadContext(date, siteId);
+    showTab('report');
+  });
 
   // ---------- 記録の表示 ----------
   function entryCards(entries) {
@@ -718,23 +1275,19 @@
     return { from: get('from'), to: get('to'), siteId: get('siteId'), categoryId: get('categoryId'), workTypeId: get('workTypeId') };
   }
 
+  /** 集計の条件で絞り込んだ工数（新しい順）。明細と CSV 出力に使う */
   function listFiltered() {
-    return sortedDesc(Core.filterEntries(state.entries, readFilters($('#list-filters')), state.workTypes));
+    return sortedDesc(Core.filterEntries(state.entries, readFilters($('#summary-filters')), state.workTypes));
   }
 
-  function renderList() {
+  /** 工数の明細（多いと重くなるので最新 50 件まで表示。CSV は全件） */
+  function renderDetails() {
     const list = listFiltered();
-    const total = Core.round2(list.reduce((s, e) => s + Core.entryManHours(e), 0));
-    $('#list-count').textContent = `${list.length} 件 / 延べ ${fmt(total)} h（${fmt(Core.round2(total / perDay()))} 人工）`;
-    $('#entry-list').innerHTML = entryCards(list);
+    const total = Core.round2(list.reduce((sum, e) => sum + Core.entryManHours(e), 0));
+    $('#list-count').textContent = `${list.length} 件 / 延べ ${fmt(total)} h（${fmt(Core.round2(total / perDay()))} 人工）` +
+      (list.length > 50 ? '・最新 50 件を表示' : '');
+    $('#entry-list').innerHTML = entryCards(list.slice(0, 50));
   }
-  $$('#list-filters input, #list-filters select').forEach((el) => el.addEventListener('change', () => {
-    if (el.name === 'categoryId') {
-      const wt = $('#list-filters [name=workTypeId]');
-      fillWorkTypeSelect(wt, el.value, 'すべて');
-    }
-    renderList();
-  }));
 
   // ---------- 累計（現場ごと・任意の時点／完工時） ----------
   function formatDateLong(iso) {
@@ -915,8 +1468,10 @@
       <div class="stat"><span>稼働日数</span><strong>${days}<small> 日</small></strong></div>
       <div class="stat"><span>記録件数</span><strong>${entries.length}<small> 件</small></strong></div>`;
 
+    renderSubmission();
     renderMonthly(entries);
     renderRates(entries);
+    renderDetails();
 
     const catKey = (e) => categoryOf(e.workTypeId);
     const byCat = Core.aggregate(entries, catKey, perDay()).map((r) => ({ ...r, name: names.category(r.key) }));
@@ -1370,7 +1925,7 @@
   });
 
   $('#export-list-csv').addEventListener('click', () => {
-    exportCsv('表示中の記録の CSV', `工数記録_${stamp()}.csv`, Core.entriesToCsv(state, listFiltered()));
+    exportCsv('表示中の工数の CSV', `工数記録_${stamp()}.csv`, Core.entriesToCsv(state, listFiltered()));
   });
 
   $('#import-csv').addEventListener('change', async (ev) => {
@@ -1406,8 +1961,8 @@
     openToday();
     setPeriod('all');
     $('#rate-by-site').checked = true;
-    // 現場用は自分の現場の累計、管理者用は全体の集計を表示する
-    showTab(role() === 'admin' ? 'summary' : 'cumul');
+    // 現場用は現場の引き継ぎ画面、管理者用は全体の集計を表示する
+    showTab(role() === 'admin' ? 'summary' : 'site');
     toast('サンプルデータを追加しました');
   }
 
@@ -1443,7 +1998,7 @@
       emps.map((x) => `<option value="${escapeHtml(x.id)}">${escapeHtml(`${x.code} ${x.name}`.trim())}</option>`).join('');
     form.elements.inputBy.value = emps.some((x) => x.id === state.settings.lastEmployeeId) ? state.settings.lastEmployeeId : '';
     fillSiteSelect($('#c-site'), state.sites, null);
-    for (const root of [$('#list-filters'), $('#summary-filters')]) {
+    for (const root of [$('#summary-filters')]) {
       fillSiteSelect($('[name=siteId]', root), state.sites, 'すべて');
       const cat = $('[name=categoryId]', root);
       fillSelect(cat, state.categories, { placeholder: 'すべて' });
@@ -1457,13 +2012,22 @@
   function render() {
     renderSelects();
     const tab = currentTab();
-    if (tab === 'entry') {
-      $('#welcome').hidden = !!(state.settings.welcomeDismissed || state.sites.length || state.entries.length);
-      // 未保存の入力は残し、保存済みなら最新の記録から読み直す（マスタ変更も反映）
+    $('#context').hidden = !['report', 'entry', 'site'].includes(tab);
+    $('#welcome').hidden = tab !== 'report' || !!(state.settings.welcomeDismissed || state.sites.length || state.entries.length);
+    // 未保存の入力は残し、保存済みなら最新の記録から読み直す（マスタ変更も反映）
+    const date = sheet.date || toISODate(new Date());
+    const siteId = sheet.siteId || defaultSiteId();
+    if (tab === 'report') {
+      if (report.dirty) renderReport();
+      else loadReport(date, siteId);
+      renderDaySites();
+    } else if (tab === 'entry') {
       if (sheet.dirty) renderSheet();
-      else loadSheet(sheet.date || toISODate(new Date()), sheet.siteId || defaultSiteId());
+      else loadSheet(date, siteId);
+    } else if (tab === 'site') {
+      renderDaySites();
+      renderSiteView();
     }
-    else if (tab === 'list') renderList();
     else if (tab === 'cumul') renderCumul();
     else if (tab === 'summary') renderSummary();
     else if (tab === 'rates') renderCompanyRates();
