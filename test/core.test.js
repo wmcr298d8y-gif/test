@@ -453,7 +453,7 @@ test('日報: 保存・置き換え・空行の除去', () => {
   r.tasks = [
     { id: 't1', place: '2F 西側', work: '配管', workTypeId: 'w1', status: 'done', memo: '' },
     { id: 't2', place: '3F', work: '分電盤 据付', workTypeId: '', status: 'partial', memo: '盤2面のうち1面' },
-    { id: 't3', place: '', work: '', status: 'notyet', memo: '' }, // 空行
+    { id: 't3', place: '', work: '', status: '', memo: '' }, // 空行
   ];
   r.tomorrow = [{ id: 'p1', place: '3F', work: '盤内結線' }];
   const res = Core.saveReport(s, r, 100, { requireInputBy: true });
@@ -502,7 +502,7 @@ test('日報の下書き: 前回の「明日の予定」＋途中・未着手の
     tasks: [
       { place: '2F 西側', work: '配管', status: 'done' },
       { place: '3F', work: '分電盤 据付', status: 'partial', memo: '1面残り' },
-      { place: '1F', work: 'ボックス取付', status: 'notyet' },
+      { place: '1F', work: 'ボックス取付', status: 'notyet' }, // 旧データの未着手 → 途中として繰越
     ],
     tomorrow: [
       { place: '3F', work: '分電盤 据付' },   // 途中の作業と同じ → 重複させない
@@ -516,12 +516,21 @@ test('日報の下書き: 前回の「明日の予定」＋途中・未着手の
   const d = Core.draftReport(s, '2026-09-26', 's1'); // 間に休日があっても直近の日報から
   assert.equal(d.saved, false);
   assert.equal(d.fromDate, '2026-09-24');
+  // 予定から入った作業は状態が未選択（完了・途中・繰越を選んでもらう）
   assert.deepEqual(d.report.tasks.map((t) => [t.place, t.work, t.status]), [
-    ['3F', '分電盤 据付', 'notyet'],
-    ['3F', '盤内結線', 'notyet'],
-    ['1F', 'ボックス取付', 'notyet'],
+    ['3F', '分電盤 据付', ''],
+    ['3F', '盤内結線', ''],
+    ['1F', 'ボックス取付', ''],
   ]);
   assert.equal(d.report.tasks[1].workTypeId, 'w3');
+  // 前回途中だった作業の進み具合は参考表示用に引き継ぎ、入力欄（memo）には入れない
+  assert.equal(d.report.tasks[0].prevMemo, '1面残り');
+  assert.equal(d.report.tasks[0].memo, '');
+  // 保存するときは参考表示を残さない
+  const s2 = reportState();
+  const r2 = { ...d.report, date: '2026-09-26', siteId: 's1', tasks: d.report.tasks.map((t) => ({ ...t, status: 'done' })) };
+  Core.saveReport(s2, r2);
+  assert.ok(Core.findReport(s2, '2026-09-26', 's1').tasks.every((t) => !t.prevMemo));
   assert.deepEqual(d.report.crew, { own: 3, subs: [{ name: '△△電設', people: 1 }] });
   assert.equal(d.report.weather, '');
   // 最初の日報は空
@@ -533,7 +542,8 @@ test('syncCarryOver: 途中・未着手は明日の予定へ自動で入れ、�
     tasks: [
       { id: 'a', place: '2F', work: '配管', status: 'partial' },
       { id: 'b', place: '3F', work: '盤', status: 'done' },
-      { id: 'c', place: '', work: '', status: 'notyet' }, // 空行は入れない
+      { id: 'c', place: '', work: '', status: 'partial' }, // 空行は入れない
+      { id: 'e', place: '1F', work: '未選択の作業', status: '' }, // 未選択は入れない
     ],
     tomorrow: [{ id: 'm', place: '1F', work: '器具搬入' }],
   });
@@ -553,7 +563,7 @@ test('syncCarryOver: 途中・未着手は明日の予定へ自動で入れ、�
   Core.syncCarryOver(r);
   assert.deepEqual(r.tomorrow.map((p) => p.work), ['器具搬入']);
   // 手書きの予定と同じ作業は二重に入れない
-  r.tasks.push({ id: 'd', place: '1F', work: '器具搬入', workTypeId: '', status: 'notyet', memo: '' });
+  r.tasks.push({ id: 'd', place: '1F', work: '器具搬入', workTypeId: '', status: 'partial', memo: '' });
   Core.syncCarryOver(r);
   assert.equal(r.tomorrow.length, 1);
 });
@@ -597,7 +607,7 @@ test('サンプル: 日報の「明日の予定」が翌営業日の下書きに
 
 test('normalizeState: 日報・予定を読み込む（旧データにはなくても空で補う）', () => {
   const s = Core.normalizeState({ reports: [{ date: '2026-09-25', siteId: 's1', tasks: [{ work: '配管' }] }] });
-  assert.equal(s.reports[0].tasks[0].status, 'notyet');
+  assert.equal(s.reports[0].tasks[0].status, ''); // 状態なしは未選択
   assert.deepEqual(s.reports[0].crew, { own: 0, subs: [] });
   assert.deepEqual(Core.normalizeState({}).events, []);
 });
@@ -606,4 +616,37 @@ test('出面は人工（0.5 刻みなど小数）で合計できる', () => {
   const r = Core.normalizeReport({ crew: { own: 2.5, subs: [{ name: '△△電設', people: 1.5 }, { name: '○○電工', people: 0.5 }] } });
   assert.equal(Core.crewTotal(r), 4.5);
   assert.equal(Core.crewTotal(null), 0);
+});
+
+test('carryOverTask: 今日やらなかった作業を明日の予定へ繰越（今日の作業からは外す）', () => {
+  const r = Core.normalizeReport({
+    tasks: [
+      { id: 'a', place: '2F', work: '配管', status: '' },
+      { id: 'b', place: '3F', work: '盤', status: 'partial' },
+      { id: 'c', place: '1F', work: '器具搬入', status: '' },
+    ],
+    tomorrow: [{ id: 'm', place: '1F', work: '器具搬入' }],
+  });
+  Core.syncCarryOver(r); // b（途中）が自動で予定に入る
+  assert.deepEqual(r.tomorrow.map((p) => p.work), ['器具搬入', '盤']);
+  Core.carryOverTask(r, 'a');
+  assert.deepEqual(r.tasks.map((t) => t.id), ['b', 'c']);
+  assert.deepEqual(r.tomorrow.map((p) => [p.work, p.carried]), [['配管', true], ['器具搬入', false], ['盤', false]]);
+  // 途中で自動に入っていた作業を繰越 → 自動の予定は繰越の予定に置き換わる（二重にならない）
+  Core.carryOverTask(r, 'b');
+  assert.deepEqual(r.tomorrow.map((p) => [p.work, p.carried, p.fromTaskId]), [['盤', true, ''], ['配管', true, ''], ['器具搬入', false, '']]);
+  // 同じ作業がすでに予定にある場合は、その予定を繰越の印にするだけ
+  Core.carryOverTask(r, 'c');
+  assert.equal(r.tomorrow.length, 3);
+  assert.equal(r.tomorrow.find((p) => p.work === '器具搬入').carried, true);
+  assert.equal(r.tasks.length, 0);
+  assert.equal(Core.carryOverTask(r, 'none'), null);
+});
+
+test('validateReport: 状態を選んでいない作業があると保存できない', () => {
+  const s = reportState();
+  const r = Core.normalizeReport({ date: '2026-09-25', siteId: 's1', tasks: [{ place: '2F', work: '配管', status: '' }, { place: '3F', work: '盤', status: 'done' }] });
+  assert.ok(Core.validateReport(s, r).some((e) => /状態を選んでいない作業が 1 件/.test(e)));
+  r.tasks[0].status = 'partial';
+  assert.deepEqual(Core.validateReport(s, r), []);
 });

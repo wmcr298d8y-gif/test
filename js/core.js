@@ -381,7 +381,8 @@
   // 今日の作業は前日の「明日の予定」から下書きし、途中・未着手の作業は翌日の予定へ持ち越す。
 
   const WEATHERS = ['晴', '曇', '雨', '雪'];
-  const TASK_STATUS = { done: '完了', partial: '途中', notyet: '未着手' };
+  // 今日の作業の状態。前日の予定から入った作業は未選択（''）で始まり、完了・途中を選ぶか「繰越」で明日の予定へ移す
+  const TASK_STATUS = { done: '完了', partial: '途中' };
 
   /** 現場ノートの項目（現場ごとに 1 枚。代わりの人が最初に読む情報） */
   const NOTEBOOK_FIELDS = [
@@ -394,12 +395,16 @@
   ];
 
   function normalizeTask(t) {
-    // skipCarry: 途中・未着手でも明日の予定には入れない（利用者が予定から外した）
-    return { id: t.id || newId(), place: t.place || '', work: t.work || '', workTypeId: t.workTypeId || '', status: t.status || 'notyet', memo: t.memo || '', skipCarry: !!t.skipCarry };
+    // 旧バージョンの「未着手」は、繰越の対象として「途中」と同じに扱う
+    const status = t.status === 'notyet' ? 'partial' : (t.status in TASK_STATUS ? t.status : '');
+    // skipCarry: 途中でも明日の予定には入れない（利用者が予定から外した）
+    // prevMemo: 下書きで表示する前回の進み具合（参考表示のみで保存しない）
+    return { id: t.id || newId(), place: t.place || '', work: t.work || '', workTypeId: t.workTypeId || '', status, memo: t.memo || '', skipCarry: !!t.skipCarry, prevMemo: t.prevMemo || '' };
   }
 
+  /** 明日の予定。carried: 今日やらずに繰り越した作業、fromTaskId: 途中の作業から自動で入れた予定 */
   function normalizePlan(p) {
-    return { id: p.id || newId(), place: p.place || '', work: p.work || '', workTypeId: p.workTypeId || '', fromTaskId: p.fromTaskId || '' };
+    return { id: p.id || newId(), place: p.place || '', work: p.work || '', workTypeId: p.workTypeId || '', fromTaskId: p.fromTaskId || '', carried: !!p.carried };
   }
 
   function normalizeReport(r) {
@@ -451,7 +456,7 @@
     const filled = (x) => String(x.place || '').trim() || String(x.work || '').trim();
     return {
       ...report,
-      tasks: report.tasks.filter(filled).map((t) => ({ ...t, place: t.place.trim(), work: t.work.trim(), memo: t.memo.trim() })),
+      tasks: report.tasks.filter(filled).map(({ prevMemo, ...t }) => ({ ...t, place: t.place.trim(), work: t.work.trim(), memo: t.memo.trim() })),
       tomorrow: report.tomorrow.filter(filled).map((p) => ({ ...p, place: p.place.trim(), work: p.work.trim() })),
       crew: { own: Number(report.crew.own) || 0, subs: report.crew.subs.filter((x) => String(x.name).trim() || Number(x.people)).map((x) => ({ name: String(x.name).trim(), people: Number(x.people) || 0 })) },
       notes: String(report.notes || '').trim(),
@@ -460,7 +465,7 @@
 
   /**
    * 日報の下書き。保存済みならその内容、なければ同じ現場の直近の日報から作る。
-   *   今日の作業 = 前回の「明日の予定」（状態は未着手）＋ 前回「途中・未着手」で予定に入っていなかった作業（持ち越し）
+   *   今日の作業 = 前回の「明日の予定」＋ 前回「途中」で予定に入っていなかった作業（どちらも状態は未選択）
    *   出面 = 前回と同じ人数（変わっていれば直してもらう）
    * 戻り値: { report, saved: 保存済みか, fromDate: 下書きの元にした日報の日付 }
    */
@@ -472,16 +477,18 @@
     if (!prev) return { report, saved: false, fromDate: null };
     const seen = new Set();
     const tasks = [];
+    // 前回「途中」だった作業の進み具合は、参考として下書きに表示する（入力欄には入れない）
+    const prevMemo = new Map(prev.tasks.filter((t) => t.status !== 'done' && t.memo).map((t) => [itemKey(t), t.memo]));
     for (const p of prev.tomorrow) {
       const key = itemKey(p);
       if (seen.has(key)) continue;
       seen.add(key);
-      tasks.push(normalizeTask({ place: p.place, work: p.work, workTypeId: p.workTypeId }));
+      tasks.push(normalizeTask({ place: p.place, work: p.work, workTypeId: p.workTypeId, status: '', prevMemo: prevMemo.get(key) }));
     }
     for (const t of prev.tasks) {
       if (t.status === 'done' || seen.has(itemKey(t))) continue;
       seen.add(itemKey(t));
-      tasks.push(normalizeTask({ place: t.place, work: t.work, workTypeId: t.workTypeId, memo: t.memo }));
+      tasks.push(normalizeTask({ place: t.place, work: t.work, workTypeId: t.workTypeId, status: '', prevMemo: t.memo }));
     }
     report.tasks = tasks;
     report.crew = { own: prev.crew.own, subs: prev.crew.subs.map((x) => ({ ...x })) };
@@ -489,8 +496,8 @@
   }
 
   /**
-   * 途中・未着手の作業を「明日の予定」に自動で入れる（すでに同じ作業があれば入れない）。
-   * 完了にした作業から自動で入れた予定は外す。手で書いた予定には触れない。
+   * 途中の作業を「明日の予定」に自動で入れる（すでに同じ作業があれば入れない）。
+   * 完了にした・状態を選び直した作業から自動で入れた予定は外す。手で書いた予定・繰越した予定には触れない。
    */
   function syncCarryOver(report) {
     const byTask = new Map(report.tasks.map((t) => [t.id, t]));
@@ -498,11 +505,11 @@
     report.tomorrow = report.tomorrow.filter((p) => {
       if (!p.fromTaskId) return true;
       const t = byTask.get(p.fromTaskId);
-      return t && t.status !== 'done' && !t.skipCarry;
+      return t && t.status === 'partial' && !t.skipCarry;
     });
     const keys = new Set(report.tomorrow.map(itemKey));
     for (const t of report.tasks) {
-      if (t.status === 'done' || t.skipCarry || !(t.place.trim() || t.work.trim())) continue;
+      if (t.status !== 'partial' || t.skipCarry || !(t.place.trim() || t.work.trim())) continue;
       const linked = report.tomorrow.find((p) => p.fromTaskId === t.id);
       if (linked) {
         // 作業の内容を直したら、自動で入れた予定も合わせる
@@ -516,6 +523,20 @@
     return report;
   }
 
+  /** 今日やらなかった作業を明日の予定へ繰り越す（今日の作業からは外す） */
+  function carryOverTask(report, taskId) {
+    const t = report.tasks.find((x) => x.id === taskId);
+    if (!t) return null;
+    report.tasks = report.tasks.filter((x) => x !== t);
+    // 途中から自動で入れていた予定は外し、繰越の予定として入れ直す
+    report.tomorrow = report.tomorrow.filter((p) => p.fromTaskId !== t.id);
+    const same = report.tomorrow.find((p) => itemKey(p) === itemKey(t));
+    if (same) { same.carried = true; return same; }
+    const plan = normalizePlan({ place: t.place, work: t.work, workTypeId: t.workTypeId, carried: true });
+    report.tomorrow.unshift(plan);
+    return plan;
+  }
+
   function validateReport(state, report, { requireInputBy = false } = {}) {
     const errors = [];
     if (requireInputBy && !report.inputBy) errors.push('入力者を選択してください');
@@ -524,6 +545,8 @@
     if (isSiteDone(state, report.siteId)) errors.push('完工済みの現場のため保存できません（管理者が完工を解除すると入力できます）');
     const r = cleanReport(report);
     if (!r.tasks.length && !r.notes) errors.push('今日の作業を 1 つ以上入力してください（作業がない日は特記事項に理由を書いてください）');
+    const unset = r.tasks.filter((t) => !t.status);
+    if (unset.length) errors.push(`状態を選んでいない作業が ${unset.length} 件あります。完了・途中を選ぶか、今日やらなかった作業は「繰越」してください`);
     if (r.crew.own < 0 || r.crew.subs.some((x) => x.people < 0)) errors.push('出面は 0 以上にしてください');
     if (r.crew.subs.some((x) => !x.name)) errors.push('協力会社の名前を入力してください');
     return errors;
@@ -990,7 +1013,7 @@
   const Core = {
     addSampleData, isEmptyRow, isSiteDone, dayEntries, saveDaySheet, previousDayRows,
     WEATHERS, TASK_STATUS, NOTEBOOK_FIELDS, normalizeReport, findReport, reportsOfSite, previousReport,
-    draftReport, syncCarryOver, validateReport, saveReport, crewTotal, upcomingEvents, reportSubmission, subcontractorNames,
+    draftReport, syncCarryOver, carryOverTask, validateReport, saveReport, crewTotal, upcomingEvents, reportSubmission, subcontractorNames,
     monthlyMatrix, siteDateRange, siteLabel, normalizeSite,
     DEFAULT_TAXONOMY, DEFAULT_SITE_KINDS, UNCATEGORIZED, emptyState,
     companyRates, companyRatesToCsv, mergeDefaultTaxonomy, defaultUnit,
