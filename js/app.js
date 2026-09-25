@@ -267,6 +267,12 @@
     return (wt && wt.unit) || '';
   }
 
+  /** 小分類の数量の数え方（設定で管理者が書く） */
+  function countRuleOf(workTypeId) {
+    const wt = state.workTypes.find((w) => w.id === workTypeId);
+    return (wt && wt.countRule) || '';
+  }
+
   function unitLabel(workTypeId) {
     const u = unitOf(workTypeId);
     return u ? `(${u})` : '';
@@ -417,6 +423,7 @@
           <input id="${id('qty')}" data-f="quantity" type="number" min="0" step="any" inputmode="decimal" value="${escapeHtml(r.quantity)}" placeholder="任意">
         </div>
         <div class="row-calc" data-mh>${rowCalcText(r)}</div>
+        <p class="count-rule" data-rule ${countRuleOf(r.workTypeId) ? '' : 'hidden'}>数え方: ${escapeHtml(countRuleOf(r.workTypeId))}</p>
       </div>
       <details class="work-more" ${hasDetail ? 'open' : ''}>
         <summary>備考${hasDetail ? '' : ' <span class="muted">（任意。「難」の理由など）</span>'}</summary>
@@ -574,6 +581,9 @@
       if (!r.workTypeId) wtSel.focus();
     }
     box.querySelector('[data-unit]').textContent = unitLabel(r.workTypeId);
+    const rule = box.querySelector('[data-rule]');
+    rule.textContent = `数え方: ${countRuleOf(r.workTypeId)}`;
+    rule.hidden = !countRuleOf(r.workTypeId);
     markDirty();
   });
 
@@ -1681,6 +1691,10 @@
         <span class="wt-extra">
           <label>単位<input type="text" class="wt-unit" data-wt-field="unit" data-id="${x.id}" value="${escapeHtml(x.unit || '')}" placeholder="m など"></label>
           <label>大分類<select data-wt-field="categoryId" data-id="${x.id}">${catOptions}</select></label>
+          <label class="wt-rule">数量の数え方
+            <textarea rows="2" data-wt-field="countRule" data-id="${x.id}"
+              placeholder="例: 図面上の管の長さ。支持金具の取付を含む">${escapeHtml(x.countRule || '')}</textarea>
+          </label>
         </span>
       </span>
       ${masterActions('workTypes', x.id, i > 0)}
@@ -1846,6 +1860,8 @@
       wt.categoryId = input.value;
       // 移動先の大分類の末尾に並べる
       state.workTypes = state.workTypes.filter((w) => w !== wt).concat(wt);
+    } else if (field === 'countRule') {
+      wt.countRule = input.value.trim();
     } else {
       wt.unit = input.value.trim();
     }
@@ -1943,7 +1959,8 @@
       const unit = escapeHtml(r.unit);
       const few = r.rate !== null && r.sites <= 2;
       body += `<tr>
-        <td class="wt-cell">${escapeHtml(names.workType(r.workTypeId))}${few ? ' <span class="pill few">参考</span>' : ''}</td>
+        <td class="wt-cell">${escapeHtml(names.workType(r.workTypeId))}${few ? ' <span class="pill few">参考</span>' : ''}
+          ${r.countRule ? `<div class="count-rule">数え方: ${escapeHtml(r.countRule)}</div>` : ''}</td>
         <td class="num rate-val">${r.rate === null ? dash : `${fmt(r.rate, 3)}<br><small>人工/${unit || '単位'}</small>`}</td>
         <td class="num">${r.sites}${r.sitesNoQuantity ? `<br><small class="muted">数量なし ${r.sitesNoQuantity}</small>` : ''}</td>
         <td class="num">${r.siteMin === null ? dash : r.siteMin === r.siteMax ? fmt(r.siteMin, 3) : `${fmt(r.siteMin, 3)}〜<br>${fmt(r.siteMax, 3)}`}</td>

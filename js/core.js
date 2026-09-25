@@ -72,7 +72,7 @@
       const catId = findOrAddCategory(state, catName);
       for (const [name, unit] of items) {
         if (!state.workTypes.some((w) => w.categoryId === catId && w.name === name)) {
-          state.workTypes.push({ id: newId(), categoryId: catId, name, unit });
+          state.workTypes.push({ id: newId(), categoryId: catId, name, unit, countRule: '' });
           added++;
         }
       }
@@ -89,7 +89,7 @@
   function findOrAddWorkType(state, categoryId, name, unit) {
     let w = state.workTypes.find((x) => x.categoryId === categoryId && x.name === name);
     if (!w) {
-      w = { id: newId(), categoryId, name, unit: unit || defaultUnit(name) };
+      w = { id: newId(), categoryId, name, unit: unit || defaultUnit(name), countRule: '' };
       state.workTypes.push(w);
     }
     return w.id;
@@ -645,7 +645,7 @@
       const quantity = round2(withQty.reduce((sum, x) => sum + x.quantity, 0));
       const siteRates = withQty.map((x) => x.manHours / perDay / x.quantity);
       return {
-        workTypeId, categoryId: wt ? wt.categoryId : '', unit: (wt && wt.unit) || '',
+        workTypeId, categoryId: wt ? wt.categoryId : '', unit: (wt && wt.unit) || '', countRule: (wt && wt.countRule) || '',
         rate: quantity > 0 ? r3(manDays / quantity) : null,
         output: quantity > 0 && manDays > 0 ? round2(quantity / manDays) : null,
         quantity, manDays: round2(manDays),
@@ -659,7 +659,7 @@
       idx(catIndex, a.categoryId) - idx(catIndex, b.categoryId) || idx(wtIndex, a.workTypeId) - idx(wtIndex, b.workTypeId));
   }
 
-  const COMPANY_RATE_CSV_HEADER = ['大分類', '小分類', '単位', '実績歩掛(人工/単位)', '1人工あたり施工量', '現場数', '最小', '最大', '数量合計', '人工合計', '難の割合(%)'];
+  const COMPANY_RATE_CSV_HEADER = ['大分類', '小分類', '単位', '実績歩掛(人工/単位)', '1人工あたり施工量', '現場数', '最小', '最大', '数量合計', '人工合計', '難の割合(%)', '数量の数え方'];
 
   /** 自社の実績歩掛を CSV にする（積算の歩掛マスタへの転記用）。condition は条件の説明（1 行目に出力） */
   function companyRatesToCsv(state, rows, condition = '') {
@@ -671,7 +671,7 @@
     for (const r of rows) {
       lines.push([
         names.category(r.categoryId), names.workType(r.workTypeId), r.unit,
-        v(r.rate), v(r.output), r.sites, v(r.siteMin), v(r.siteMax), r.quantity, r.manDays, r.hardShare,
+        v(r.rate), v(r.output), r.sites, v(r.siteMin), v(r.siteMax), r.quantity, r.manDays, r.hardShare, r.countRule || '',
       ].map(csvEscape).join(','));
     }
     return '\uFEFF' + lines.join('\r\n') + '\r\n';
@@ -846,7 +846,8 @@
     const catIds = new Set(state.categories.map((c) => c.id));
     state.workTypes = raw.workTypes.map((w) => {
       // 旧バージョンの小分類ごとの標準歩掛（standardRate）は廃止
-      const { standardRate, ...wt } = { unit: defaultUnit(w.name), ...w };
+      // countRule: 数量の数え方（例: 図面上の管の長さ。支持金具の取付を含む）。人によって数え方が違うと歩掛が比べられないため、会社として決めて書いておく
+      const { standardRate, ...wt } = { unit: defaultUnit(w.name), countRule: '', ...w };
       if (!catIds.has(wt.categoryId)) wt.categoryId = findOrAddCategory(state, UNCATEGORIZED);
       return wt;
     });
@@ -898,6 +899,15 @@
       ['幹線ケーブル敷設', 0.055], ['照明器具取付', 0.13], ['コンセント取付', 0.055],
       ['スイッチ取付', 0.055], ['分電盤据付', 1.6], ['LAN配線', 0.011], ['自火報 感知器取付', 0.065],
     ].filter(([n]) => wt(n)));
+
+    // 数量の数え方の例（実際の数え方は会社で決めて「設定」で書き換える）
+    const sampleRules = [
+      ['電線管敷設（露出）', '【サンプル】図面上の管の長さ（m）。支持金具の取付を含む。'],
+      ['照明器具取付', '【サンプル】器具 1 台＝1 台（種類は問わない）。結線まで含む。'],
+      ['ケーブル配線（VVF等）', '【サンプル】ケーブル 1 本ごとの長さ（m）。3 本並べたら 3 本分。'],
+      ['分電盤据付', '【サンプル】盤 1 面＝1 面。盤内結線は「盤内結線」で別に数える。'],
+    ];
+    for (const [n, rule] of sampleRules) { const w = wt(n); if (w && !w.countRule) w.countRule = rule; }
 
     const employees = [['E001', '山田 太郎'], ['E002', '鈴木 一郎'], ['E003', '高橋 健']].map(([code, name]) => {
       let emp = state.employees.find((x) => x.code === code);

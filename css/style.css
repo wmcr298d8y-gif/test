@@ -527,3 +527,13 @@ button.chip { min-height: 32px; }
 .todo li > span { display: flex; flex-direction: column; gap: 2px; }
 .todo .thumbs { flex-direction: row; }
 
+
+/* ---------- 数量の数え方 ---------- */
+/* 小分類の行: ボタンを右上に置き、単位・大分類・数え方を行の幅いっぱいに使う */
+.master-list li.wt-row { display: block; position: relative; }
+.wt-row .master-actions { position: absolute; top: 8px; right: 12px; }
+.wt-row .master-name { display: block; padding-right: 0; }
+.wt-extra .wt-rule { flex: 1 1 100%; }
+.wt-extra .wt-rule textarea { width: 100%; min-height: 0; padding: 6px 8px; font-size: 0.85rem; resize: vertical; }
+.count-rule { grid-column: 1 / -1; margin: 0; font-size: 0.78rem; color: var(--muted); line-height: 1.4; }
+.rates .count-rule { font-weight: 400; margin-top: 2px; }

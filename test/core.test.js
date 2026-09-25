@@ -258,8 +258,13 @@ test('companyRatesToCsv: 条件行と見出し・値', () => {
   const csv = Core.companyRatesToCsv(s, Core.companyRates(s), '完工現場のみ');
   const lines = csv.replace(/^﻿/, '').trim().split('\r\n');
   assert.equal(lines[0], '条件: 完工現場のみ');
-  assert.equal(lines[1], '大分類,小分類,単位,実績歩掛(人工/単位),1人工あたり施工量,現場数,最小,最大,数量合計,人工合計,難の割合(%)');
-  assert.equal(lines[2], '配管工事,電線管敷設（露出）,m,0.04,25,2,0.02,0.08,150,6,33.33');
+  assert.equal(lines[1], '大分類,小分類,単位,実績歩掛(人工/単位),1人工あたり施工量,現場数,最小,最大,数量合計,人工合計,難の割合(%),数量の数え方');
+  assert.equal(lines[2], '配管工事,電線管敷設（露出）,m,0.04,25,2,0.02,0.08,150,6,33.33,');
+  // 数え方を決めてあれば、歩掛と一緒に出力する（積算側でどういう数え方の数字か分かるように）
+  s.workTypes[0].countRule = '図面上の管の長さ。支持金具の取付を含む';
+  const rows2 = Core.companyRates(s);
+  assert.equal(rows2[0].countRule, '図面上の管の長さ。支持金具の取付を含む');
+  assert.match(Core.companyRatesToCsv(s, rows2), /,33\.33,図面上の管の長さ。支持金具の取付を含む\r\n/);
 });
 
 test('saveDaySheet / previousDayRows: 難度を保存し、呼び出しでも引き継ぐ', () => {
@@ -691,4 +696,13 @@ test('ふりかえり: 保存でき、前後の空白は取り除く', () => {
   assert.equal(Core.findReport(s, '2026-09-24', 's1').reflection, '段取りが良かった');
   // 下書き（保存済み）にも残る
   assert.equal(Core.draftReport(s, '2026-09-24', 's1').report.reflection, '段取りが良かった');
+});
+
+test('数量の数え方: 初期値は空欄、旧データにも空欄で補い、サンプルには例が入る', () => {
+  const s = Core.emptyState();
+  assert.ok(s.workTypes.every((w) => w.countRule === ''));
+  const old = Core.normalizeState({ categories: [{ id: 'c', name: '配管工事' }], workTypes: [{ id: 'a', categoryId: 'c', name: 'x', unit: 'm' }] });
+  assert.equal(old.workTypes[0].countRule, '');
+  Core.addSampleData(s, '2026-09-25');
+  assert.match(s.workTypes.find((w) => w.name === '電線管敷設（露出）').countRule, /サンプル/);
 });
