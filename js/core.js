@@ -677,6 +677,96 @@
     return '\uFEFF' + lines.join('\r\n') + '\r\n';
   }
 
+  // ---------- 工種マスタの CSV（Excel での編集用。本番の kintone 工種アプリと同じ項目） ----------
+
+  const WORKTYPE_CSV_HEADER = ['大分類', '小分類', '単位', '数量の数え方', '表示順'];
+
+  /** 工種を大分類・小分類の並び順で CSV にする */
+  function workTypesToCsv(state) {
+    const lines = [WORKTYPE_CSV_HEADER.join(',')];
+    let order = 0;
+    for (const c of state.categories) {
+      for (const w of workTypesOfCategory(state, c.id)) {
+        lines.push([c.name, w.name, w.unit || '', w.countRule || '', ++order].map(csvEscape).join(','));
+      }
+    }
+    return '\uFEFF' + lines.join('\r\n') + '\r\n';
+  }
+
+  /** Excel からコピーしたセル（タブ区切り）か CSV かを見分けて表に分ける */
+  function parseTable(text) {
+    const s = String(text || '').replace(/^\uFEFF/, '');
+    const firstLine = s.split(/\r?\n/, 1)[0];
+    if (firstLine.includes('\t')) {
+      return s.split(/\r?\n/).map((line) => line.split('\t')).filter((r) => r.some((f) => f.trim() !== ''));
+    }
+    return parseCsv(s);
+  }
+
+  /**
+   * 工種マスタを CSV（またはタブ区切り）から取り込む。
+   * 大分類＋小分類の名前で照合し、あれば単位・数量の数え方を更新、なければ追加する。
+   * CSV にない工種は削除しない（過去の記録で使っているため）。
+   * すべての工種が入った CSV（書き出して編集したもの）のときだけ、表示順（なければ行の順）に並べ替える。
+   * 一部だけの CSV では並び順を変えず、新しい工種は後ろに追加する。
+   * 戻り値: { added, updated, errors }
+   */
+  function importWorkTypesCsv(state, text) {
+    const rows = parseTable(text);
+    if (!rows.length) return { added: 0, updated: 0, errors: ['データがありません'] };
+    const header = rows[0].map((h) => h.trim());
+    const col = (name) => header.indexOf(name);
+    const idx = { category: col('大分類'), name: col('小分類'), unit: col('単位'), rule: col('数量の数え方'), order: col('表示順') };
+    if (idx.category < 0 || idx.name < 0) return { added: 0, updated: 0, errors: ['見出し行に 大分類・小分類 が必要です'] };
+    const get = (r, i) => (i >= 0 ? String(r[i] ?? '').trim() : '');
+    const errors = [];
+    const seen = [];
+    let added = 0;
+    let updated = 0;
+    rows.slice(1).forEach((r, n) => {
+      const catName = get(r, idx.category);
+      const name = get(r, idx.name);
+      if (!catName || !name) { errors.push(`${n + 2}行目: 大分類と小分類を入力してください`); return; }
+      const catId = findOrAddCategory(state, catName);
+      let wt = state.workTypes.find((w) => w.categoryId === catId && w.name === name);
+      const unit = get(r, idx.unit);
+      if (!wt) {
+        wt = { id: newId(), categoryId: catId, name, unit: unit || defaultUnit(name), countRule: '' };
+        state.workTypes.push(wt);
+        added++;
+      } else {
+        updated++;
+      }
+      if (unit) wt.unit = unit;
+      // 数え方は空欄も反映する（Excel で消した場合）
+      if (idx.rule >= 0) wt.countRule = get(r, idx.rule);
+      const order = Number(get(r, idx.order));
+      seen.push({ wt, catId, order: Number.isFinite(order) && get(r, idx.order) !== '' ? order : Infinity, row: n });
+    });
+    const inCsv = new Set(seen.map((x) => x.wt));
+    if (state.workTypes.every((w) => inCsv.has(w))) {
+      seen.sort((a, b) => a.order - b.order || a.row - b.row);
+      state.workTypes = seen.map((x) => x.wt);
+      const catOrder = [...new Set(seen.map((x) => x.catId))];
+      state.categories = catOrder.map((id) => state.categories.find((c) => c.id === id))
+        .concat(state.categories.filter((c) => !catOrder.includes(c.id)));
+    }
+    return { added, updated, errors, reordered: state.workTypes.every((w) => inCsv.has(w)) };
+  }
+
+  /**
+   * ファイルの中身を文字列にする。UTF-8 で読めなければ Shift_JIS として読む
+   * （日本語版 Excel で「CSV（コンマ区切り）」として保存すると Shift_JIS になるため）。
+   */
+  function decodeText(buffer) {
+    const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+    try {
+      return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    } catch (e) {
+      return new TextDecoder('shift_jis').decode(bytes);
+    }
+  }
+
   function csvEscape(v) {
     const s = v === null || v === undefined ? '' : String(v);
     return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
@@ -1032,7 +1122,7 @@
     draftReport, syncCarryOver, validateReport, saveReport, crewTotal, upcomingEvents, reportSubmission, subcontractorNames,
     monthlyMatrix, siteDateRange, siteLabel, normalizeSite,
     DEFAULT_TAXONOMY, DEFAULT_SITE_KINDS, UNCATEGORIZED, emptyState,
-    companyRates, companyRatesToCsv, mergeDefaultTaxonomy, defaultUnit,
+    companyRates, companyRatesToCsv, workTypesToCsv, importWorkTypesCsv, parseTable, decodeText, mergeDefaultTaxonomy, defaultUnit,
     findOrAddCategory, findOrAddWorkType, workTypesOfCategory,
     newId, round2, parseTime, hoursFromRange, isBlank, entryQuantity, entryManHours, validateEntry,
     filterEntries, aggregate, pivotByDate, productivity,

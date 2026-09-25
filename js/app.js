@@ -73,7 +73,7 @@
   // ブラウザ標準の alert / confirm / prompt は埋め込み表示などで使えない場合があるため、画面内に表示する
   const modal = {
     root: $('#modal'),
-    open({ title = '', message = '', input = null, text = null, buttons }) {
+    open({ title = '', message = '', input = null, text = null, editable = false, placeholder = '', buttons }) {
       return new Promise((resolve) => {
         const inputEl = $('#modal-input');
         const textEl = $('#modal-text');
@@ -85,6 +85,8 @@
         inputEl.value = input ?? '';
         textEl.hidden = text === null;
         textEl.value = text ?? '';
+        textEl.readOnly = !editable;
+        textEl.placeholder = placeholder;
         const actions = $('#modal-actions');
         actions.innerHTML = '';
         const prevFocus = document.activeElement;
@@ -111,7 +113,7 @@
         }
         this.root.hidden = false;
         document.addEventListener('keydown', onKey);
-        (input !== null ? inputEl : actions.lastElementChild).focus();
+        (input !== null ? inputEl : editable ? textEl : actions.lastElementChild).focus();
         if (input !== null) inputEl.select();
       });
     },
@@ -174,12 +176,13 @@
     return showExport({ title, filename, content: csv, type: 'text/csv', copyText: csvToTsv(csv) });
   }
 
+  /** ファイルを文字列で読む。UTF-8 で読めなければ Shift_JIS（日本語版 Excel の CSV）として読む */
   function readFile(file) {
     return new Promise((resolve, reject) => {
       const r = new FileReader();
-      r.onload = () => resolve(r.result);
+      r.onload = () => resolve(Core.decodeText(r.result));
       r.onerror = () => reject(r.error);
-      r.readAsText(file, 'utf-8');
+      r.readAsArrayBuffer(file);
     });
   }
 
@@ -1891,6 +1894,41 @@
     toast(field === 'status'
       ? (site.status === 'done' ? `完工にしました（完工日 ${formatDate(site.completedOn)}）` : '稼働中に戻しました')
       : '保存しました');
+  });
+
+  // ---------- 工種の CSV（Excel で編集） ----------
+  function showWorkTypeImportResult({ added, updated, errors, reordered }) {
+    save();
+    render();
+    showAlert(`工種を取り込みました（更新 ${updated} 件・追加 ${added} 件）。` +
+      (reordered ? '\n表示順に並べ替えました。' : '\n一部の工種だけの取り込みのため、並び順は変えていません。') +
+      (errors.length ? `\n\n取り込めなかった行:\n${errors.slice(0, 20).join('\n')}` : ''));
+  }
+
+  $('#wt-export').addEventListener('click', () => {
+    exportCsv('工種の CSV', `工種マスタ_${stamp()}.csv`, Core.workTypesToCsv(state));
+  });
+
+  $('#wt-import').addEventListener('change', async (ev) => {
+    const file = ev.target.files[0];
+    ev.target.value = '';
+    if (!file) return;
+    try {
+      showWorkTypeImportResult(Core.importWorkTypesCsv(state, await readFile(file)));
+    } catch (e) {
+      showAlert('CSV を読み込めませんでした: ' + e.message);
+    }
+  });
+
+  $('#wt-paste').addEventListener('click', async () => {
+    const text = await modal.open({
+      title: 'Excel から貼り付けて取り込む',
+      message: '見出し行（大分類・小分類・単位・数量の数え方・表示順）も含めてセルを選んでコピーし、下に貼り付けてください。',
+      text: '', editable: true, placeholder: '大分類\t小分類\t単位\t数量の数え方\t表示順\n配管工事\t電線管敷設（露出）\tm\t…',
+      buttons: [{ label: 'キャンセル', value: null }, { label: '取り込む', className: 'primary', value: () => $('#modal-text').value }],
+    });
+    if (!text || !text.trim()) return;
+    showWorkTypeImportResult(Core.importWorkTypesCsv(state, text));
   });
 
   $('#merge-defaults').addEventListener('click', () => {

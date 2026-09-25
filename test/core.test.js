@@ -706,3 +706,72 @@ test('数量の数え方: 初期値は空欄、旧データにも空欄で補い
   Core.addSampleData(s, '2026-09-25');
   assert.match(s.workTypes.find((w) => w.name === '電線管敷設（露出）').countRule, /サンプル/);
 });
+
+test('工種の CSV: 書き出し → Excel で編集 → 取り込み（更新・追加・並び順・削除しない）', () => {
+  const s = sampleState();
+  s.workTypes[0].countRule = '図面上の長さ';
+  const csv = Core.workTypesToCsv(s);
+  const lines = csv.replace(/^﻿/, '').trim().split('\r\n');
+  assert.equal(lines[0], '大分類,小分類,単位,数量の数え方,表示順');
+  // 大分類の順（配管工事 → 照明・配線器具）、その中は登録順
+  assert.deepEqual(lines.slice(1), [
+    '配管工事,電線管敷設（露出）,m,図面上の長さ,1',
+    '配管工事,ボックス取付,個,,2',
+    '照明・配線器具,照明器具取付,台,,3',
+  ]);
+
+  const edited = [
+    '大分類,小分類,単位,数量の数え方,表示順',
+    '照明・配線器具,照明器具取付,台,器具 1 台＝1 台。結線まで含む,1',  // 数え方を追加・先頭へ
+    '配管工事,電線管敷設（露出）,m,,2',                             // 数え方を消す
+    '配管工事,"ケーブルラック敷設",m,"長さ（m）。""吊りボルト""を含む",3', // 新規（引用符入り）
+    ',名前なし,,,',                                                 // エラー
+  ].join('\r\n');
+  const res = Core.importWorkTypesCsv(s, edited);
+  assert.equal(res.added, 1);
+  assert.equal(res.updated, 2);
+  assert.equal(res.errors.length, 1);
+  assert.match(res.errors[0], /^5行目/);
+  const byName = (n) => s.workTypes.find((w) => w.name === n);
+  assert.equal(byName('照明器具取付').countRule, '器具 1 台＝1 台。結線まで含む');
+  assert.equal(byName('電線管敷設（露出）').countRule, '');
+  assert.equal(byName('ケーブルラック敷設').countRule, '長さ（m）。"吊りボルト"を含む');
+  assert.equal(byName('ケーブルラック敷設').categoryId, 'c1');
+  // CSV にない「ボックス取付」は消さない。一部だけの CSV なので並び順は変えず、新しい工種は後ろへ。ID は変わらない
+  assert.equal(res.reordered, false);
+  assert.deepEqual(s.workTypes.map((w) => w.name), ['電線管敷設（露出）', '照明器具取付', 'ボックス取付', 'ケーブルラック敷設']);
+  assert.equal(byName('電線管敷設（露出）').id, 'w1');
+  assert.deepEqual(s.categories.map((c) => c.name), ['配管工事', '照明・配線器具']);
+
+  // すべての工種が入った CSV なら表示順に並べ替える
+  const all = [
+    '大分類,小分類,単位,数量の数え方,表示順',
+    '照明・配線器具,照明器具取付,台,,1',
+    '配管工事,ボックス取付,個,,2',
+    '配管工事,電線管敷設（露出）,m,,3',
+    '配管工事,ケーブルラック敷設,m,,4',
+  ].join('\r\n');
+  const res2 = Core.importWorkTypesCsv(s, all);
+  assert.equal(res2.reordered, true);
+  assert.deepEqual(s.workTypes.map((w) => w.name), ['照明器具取付', 'ボックス取付', '電線管敷設（露出）', 'ケーブルラック敷設']);
+  assert.deepEqual(s.categories.map((c) => c.name), ['照明・配線器具', '配管工事']);
+});
+
+test('工種の取り込み: Excel からコピーしたタブ区切り、新しい大分類、見出しのチェック', () => {
+  const s = sampleState();
+  const tsv = '大分類\t小分類\t単位\t数量の数え方\n防災設備\t自火報 感知器取付\t個\t感知器 1 個＝1 個\n';
+  const res = Core.importWorkTypesCsv(s, tsv);
+  assert.deepEqual(res, { added: 1, updated: 0, errors: [], reordered: false });
+  assert.ok(s.categories.some((c) => c.name === '防災設備'));
+  assert.equal(s.workTypes.find((w) => w.name === '自火報 感知器取付').countRule, '感知器 1 個＝1 個');
+  assert.match(Core.importWorkTypesCsv(s, '名前,単位\na,m').errors[0], /大分類・小分類/);
+  assert.deepEqual(Core.parseTable('a\tb\n\nc\td'), [['a', 'b'], ['c', 'd']]);
+});
+
+test('decodeText: UTF-8 と Shift_JIS（日本語版 Excel の CSV）を読み分ける', () => {
+  const utf8 = new TextEncoder().encode('大分類,小分類');
+  assert.equal(Core.decodeText(utf8), '大分類,小分類');
+  // 「大分類」の Shift_JIS
+  const sjis = new Uint8Array([0x91, 0xE5, 0x95, 0xAA, 0x97, 0xDE]);
+  assert.equal(Core.decodeText(sjis), '大分類');
+});

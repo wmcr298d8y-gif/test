@@ -338,6 +338,17 @@
       <div class="actions wrap">
         <button type="button" id="merge-defaults">電気設備の標準工種を追加（不足分のみ）</button>
       </div>
+      <h3 class="sub-head">Excel で編集する</h3>
+      <p class="muted small">大分類・小分類・単位・数量の数え方・表示順を CSV で書き出し、Excel で編集して取り込めます。
+        取り込みは大分類＋小分類の名前で照合し、あれば更新、なければ追加します（CSV にない工種は消しません）。
+        名前の変更や大分類の移動は、上の一覧で行ってください。</p>
+      <div class="actions wrap">
+        <button type="button" id="wt-export">CSV 出力（Excel 用）</button>
+        <label class="button" for="wt-import">CSV を取り込む
+          <input type="file" id="wt-import" accept=".csv,.txt,text/csv" hidden>
+        </label>
+        <button type="button" id="wt-paste">Excel から貼り付けて取り込む</button>
+      </div>
 
       <h2>換算</h2>
       <div class="field inline">
@@ -366,7 +377,7 @@
       <h2 id="modal-title"></h2>
       <p class="modal-msg" id="modal-msg"></p>
       <input type="text" id="modal-input" hidden>
-      <textarea id="modal-text" rows="8" readonly hidden></textarea>
+      <textarea id="modal-text" rows="8" readonly hidden aria-label="内容"></textarea>
       <div class="modal-actions" id="modal-actions"></div>
     </div>
   </div>

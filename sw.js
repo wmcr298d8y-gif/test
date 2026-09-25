@@ -1,5 +1,5 @@
 // オフラインでも起動できるようにアプリ本体をキャッシュする
-const CACHE = 'site-work-hours-v20';
+const CACHE = 'site-work-hours-v21';
 const ASSETS = ['./', './index.html', './css/style.css', './js/core.js', './js/app.js', './manifest.webmanifest', './icon.svg'];
 
 self.addEventListener('install', (e) => {
