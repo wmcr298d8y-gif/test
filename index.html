@@ -89,6 +89,14 @@
         </div>
 
         <div class="field">
+          <label for="f-quantity">数量（出来高） <span class="optional">任意・歩掛り算出に使用</span></label>
+          <div class="with-unit">
+            <input id="f-quantity" type="number" name="quantity" min="0" step="any" inputmode="decimal" placeholder="この作業で施工した量">
+            <span class="unit" id="f-unit"></span>
+          </div>
+        </div>
+
+        <div class="field">
           <label for="f-note">備考 <span class="optional">任意</span></label>
           <textarea id="f-note" name="note" rows="2" placeholder="作業内容・場所など"></textarea>
         </div>
@@ -138,6 +146,12 @@
         </div>
       </div>
       <div class="totals" id="summary-totals"></div>
+      <div class="section-head">
+        <h2>歩掛り（実績）</h2>
+        <label class="check"><input type="checkbox" id="rate-by-site"> 現場ごとに分ける</label>
+      </div>
+      <div class="table-scroll" id="summary-rates"></div>
+      <p class="muted small">歩掛り = 期間内の人工合計 ÷ 数量合計。数量を入れていない日の工数も分子に含みます。標準歩掛りは「設定」の工種で登録できます。</p>
       <h2>工種別</h2>
       <div id="summary-by-worktype"></div>
       <h2>現場別</h2>
@@ -156,8 +170,10 @@
       <ul class="master-list" id="master-sites"></ul>
 
       <h2>工種</h2>
+      <p class="muted small">単位は数量の単位（m³・m²・t など）、標準歩掛りは 1単位あたりの人工です（任意・実績との比較に使用）。</p>
       <form class="add-form" data-master="workTypes">
         <input type="text" name="name" placeholder="工種を追加" required>
+        <input type="text" name="unit" placeholder="単位" class="unit-input">
         <button type="submit">追加</button>
       </form>
       <ul class="master-list" id="master-workTypes"></ul>

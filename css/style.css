@@ -206,3 +206,22 @@ thead th { font-size: 0.8rem; color: var(--muted); }
   .tabs, .actions, .card-actions, .filters .quick { display: none !important; }
   body { background: #fff; }
 }
+
+.with-unit { display: flex; align-items: center; gap: 8px; }
+.with-unit .unit { min-width: 2.5em; color: var(--muted); font-weight: 600; }
+.small { font-size: 0.8rem; }
+.section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.check { display: inline-flex; align-items: center; gap: 6px; font-size: 0.85rem; cursor: pointer; }
+.check input { width: auto; min-height: 0; }
+.add-form .unit-input { flex: 0 0 5em; }
+.rates th, .rates td { white-space: nowrap; }
+.rates tr > :first-child { position: sticky; left: 0; background: var(--surface); z-index: 1; }
+.rate-val { font-weight: 700; font-size: 1rem; }
+.over { color: var(--danger); font-weight: 700; }
+.under { color: #2e8b57; font-weight: 700; }
+.wt-extra { display: flex; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
+.wt-extra label { display: flex; flex-direction: column; font-size: 0.7rem; color: var(--muted); gap: 2px; }
+.wt-extra input { min-height: 34px; padding: 4px 8px; font-size: 0.85rem; }
+.wt-extra .wt-unit { width: 5em; }
+.wt-extra .wt-std { width: 9em; }
+.master-list li.wt-row { align-items: flex-start; }

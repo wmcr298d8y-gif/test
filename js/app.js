@@ -123,6 +123,15 @@
     if (h !== null) form.elements.hours.value = h;
   }
 
+  function unitOf(workTypeId) {
+    const wt = state.workTypes.find((w) => w.id === workTypeId);
+    return (wt && wt.unit) || '';
+  }
+
+  function updateUnit() {
+    $('#f-unit').textContent = unitOf(form.elements.workTypeId.value);
+  }
+
   function updatePreview() {
     const people = Number(form.elements.people.value) || 0;
     const hours = Number(form.elements.hours.value) || 0;
@@ -134,6 +143,7 @@
   ['start', 'end', 'breakMinutes'].forEach((n) => form.elements[n].addEventListener('input', () => { syncHoursFromRange(); updatePreview(); }));
   ['hours', 'people'].forEach((n) => form.elements[n].addEventListener('input', updatePreview));
   form.elements.date.addEventListener('change', renderDayList);
+  form.elements.workTypeId.addEventListener('change', updateUnit);
 
   $$('#quick-hours button').forEach((b) => b.addEventListener('click', () => {
     form.elements.hours.value = b.dataset.h;
@@ -158,6 +168,7 @@
     $('#submit-btn').textContent = '記録する';
     $('#cancel-edit').hidden = true;
     $('#form-errors').innerHTML = '';
+    updateUnit();
     updateModeUI();
   }
 
@@ -172,6 +183,8 @@
     form.elements.worker.value = e.worker || '';
     form.elements.people.value = e.people;
     form.elements.note.value = e.note || '';
+    form.elements.quantity.value = Core.isBlank(e.quantity) ? '' : e.quantity;
+    updateUnit();
     const range = !!(e.start && e.end);
     form.elements.mode.value = range ? 'range' : 'hours';
     if (range) {
@@ -227,6 +240,7 @@
       start: range ? f.start.value : '',
       end: range ? f.end.value : '',
       breakMinutes: range ? Number(f.breakMinutes.value) || 0 : '',
+      quantity: f.quantity.value === '' ? '' : Number(f.quantity.value),
       note: f.note.value.trim(),
     };
     const errors = Core.validateEntry(entry);
@@ -262,6 +276,7 @@
         <div class="card-main">
           <div class="card-title"><span class="tag">${escapeHtml(names.workType(e.workTypeId))}</span> ${escapeHtml(names.site(e.siteId))}</div>
           <div class="card-sub">${formatDate(e.date)} ${escapeHtml(e.worker || '')} ${e.people}人 × ${fmt(e.hours)}h ${escapeHtml(time)}</div>
+          ${Core.isBlank(e.quantity) ? '' : `<div class="card-sub">数量 <strong>${fmt(e.quantity)} ${escapeHtml(unitOf(e.workTypeId))}</strong></div>`}
           ${e.note ? `<div class="card-note">${escapeHtml(e.note)}</div>` : ''}
         </div>
         <div class="card-side">
@@ -344,6 +359,8 @@
       <div class="stat"><span>稼働日数</span><strong>${days}<small> 日</small></strong></div>
       <div class="stat"><span>記録件数</span><strong>${entries.length}<small> 件</small></strong></div>`;
 
+    renderRates(entries);
+
     const byWt = Core.aggregate(entries, (e) => e.workTypeId, perDay()).map((r) => ({ ...r, name: names.workType(r.key) }));
     $('#summary-by-worktype').innerHTML = barTable(byWt, '工種');
 
@@ -364,7 +381,49 @@
     </table>`;
   }
 
+  function renderRates(entries) {
+    const bySite = $('#rate-by-site').checked;
+    const rows = Core.productivity(entries, state.workTypes, perDay(), { bySite });
+    if (!rows.length) {
+      $('#summary-rates').innerHTML = '<p class="muted">データがありません</p>';
+      return;
+    }
+    const names = Core.nameLookup(state);
+    const cell = (v, suffix = '') => (v === null ? '<span class="muted">—</span>' : fmt(v) + suffix);
+    const ratioCell = (r) => {
+      if (r.ratio === null) return '<span class="muted">—</span>';
+      // 標準より手間がかかっている（100% 超）なら赤、少ないなら緑
+      const cls = r.ratio > 100 ? 'over' : 'under';
+      return `<span class="${cls}">${fmt(r.ratio)}%</span>`;
+    };
+    $('#summary-rates').innerHTML = `<table class="rates">
+      <thead><tr>
+        ${bySite ? '<th>現場</th>' : ''}<th>工種</th>
+        <th class="num">数量</th><th class="num">人工</th>
+        <th class="num">歩掛り<br><small>人工/単位</small></th>
+        <th class="num">1人工あたり<br><small>施工量</small></th>
+        <th class="num">標準歩掛り</th><th class="num">対標準</th>
+        <th class="num">稼働日<br><small>(数量記録日)</small></th>
+      </tr></thead>
+      <tbody>${rows.map((r) => {
+        const unit = escapeHtml(r.unit);
+        return `<tr>
+          ${bySite ? `<td>${escapeHtml(names.site(r.siteId))}</td>` : ''}
+          <td>${escapeHtml(names.workType(r.workTypeId))}</td>
+          <td class="num">${r.quantity > 0 ? `${fmt(r.quantity)} ${unit}` : '<span class="muted">未入力</span>'}</td>
+          <td class="num">${fmt(r.manDays)}</td>
+          <td class="num rate-val">${r.rate === null ? '<span class="muted">—</span>' : `${fmt(r.rate)}<small> 人工/${unit || '単位'}</small>`}</td>
+          <td class="num">${cell(r.output, ` ${unit}`)}</td>
+          <td class="num">${cell(r.standardRate)}</td>
+          <td class="num">${ratioCell(r)}</td>
+          <td class="num">${r.days}日 (${r.quantityDays}日)</td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table>`;
+  }
+
   $$('#summary-filters input, #summary-filters select').forEach((el) => el.addEventListener('change', renderSummary));
+  $('#rate-by-site').addEventListener('change', renderSummary);
 
   function setPeriod(kind) {
     const now = new Date();
@@ -403,8 +462,12 @@
       const list = state[key];
       ul.innerHTML = list.length ? list.map((x, i) => {
         const used = usageCount(key, x.id);
-        return `<li>
-          <span class="master-name">${escapeHtml(x.name)}${used ? ` <small class="muted">${used}件</small>` : ''}</span>
+        const extra = key === 'workTypes' ? `<span class="wt-extra">
+            <label>単位<input type="text" class="wt-unit" data-wt-field="unit" data-id="${x.id}" value="${escapeHtml(x.unit || '')}" placeholder="m² など"></label>
+            <label>標準歩掛り（人工/${escapeHtml(x.unit || '単位')}）<input type="number" class="wt-std" data-wt-field="standardRate" data-id="${x.id}" value="${escapeHtml(x.standardRate ?? '')}" min="0" step="any" inputmode="decimal" placeholder="未設定"></label>
+          </span>` : '';
+        return `<li class="${key === 'workTypes' ? 'wt-row' : ''}">
+          <span class="master-name">${escapeHtml(x.name)}${used ? ` <small class="muted">${used}件</small>` : ''}${extra}</span>
           <span class="master-actions">
             <button type="button" data-master-act="up" data-key="${key}" data-id="${x.id}" ${i === 0 ? 'disabled' : ''} aria-label="上へ">↑</button>
             <button type="button" data-master-act="rename" data-key="${key}" data-id="${x.id}">名前変更</button>
@@ -422,7 +485,12 @@
     const name = f.elements.name.value.trim();
     if (!name) return;
     if (state[key].some((x) => x.name === name)) { toast('同じ名前がすでに登録されています'); return; }
-    state[key].push({ id: Core.newId(), name });
+    const item = { id: Core.newId(), name };
+    if (key === 'workTypes') {
+      item.unit = f.elements.unit.value.trim() || Core.DEFAULT_WORK_TYPE_UNITS[name] || '';
+      item.standardRate = '';
+    }
+    state[key].push(item);
     save();
     f.reset();
     render();
@@ -451,6 +519,24 @@
     }
     save();
     render();
+  });
+
+  document.addEventListener('change', (ev) => {
+    const input = ev.target.closest('input[data-wt-field]');
+    if (!input) return;
+    const wt = state.workTypes.find((w) => w.id === input.dataset.id);
+    if (!wt) return;
+    if (input.dataset.wtField === 'standardRate') {
+      const v = input.value.trim();
+      if (v !== '' && !(Number(v) >= 0)) { input.value = wt.standardRate ?? ''; return; }
+      wt.standardRate = v === '' ? '' : Number(v);
+    } else {
+      wt.unit = input.value.trim();
+    }
+    save();
+    render();
+    updateUnit();
+    toast('保存しました');
   });
 
   $('#s-perday').addEventListener('change', (ev) => {
