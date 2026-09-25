@@ -440,7 +440,6 @@ button.chip { min-height: 32px; }
 .task-status button + button { border-left: 1px solid var(--border); }
 .task-fields { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 6px; }
 .task input, .task select { min-height: 38px; padding: 6px 10px; }
-.task-wt { font-size: 0.85rem; color: var(--muted); }
 .task-del { min-height: 30px; padding: 2px 10px; font-size: 0.8rem; }
 
 .photos { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }

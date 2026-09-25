@@ -450,10 +450,20 @@
     }
     const crew = Core.crewTotal(rep);
     const rest = Core.round2(crew - md);
-    const withType = rep.tasks.filter((t) => t.workTypeId && !sheet.rows.some((r) => r.workTypeId === t.workTypeId));
+    const pending = pendingReportTasks(rep);
     el.innerHTML = `<div>日報の出面 <strong>${fmt(crew)} 人工</strong> のうち、工数に割り振り済み <strong>${fmt(md)} 人工</strong>
       ${rest > 0 ? `<span class="pill active">残り ${fmt(rest)} 人工</span>` : rest < 0 ? `<span class="pill hard">出面より ${fmt(-rest)} 人工多い</span>` : '<span class="pill active">割り振り完了</span>'}</div>` +
-      (withType.length ? `<button type="button" id="rows-from-report">日報の作業から工種を取り込む（${withType.length} 件）</button>` : '');
+      (pending.length ? `<button type="button" id="rows-from-report">日報の作業を取り込む（${pending.length} 件）</button>` : '');
+  }
+
+  /** 日報の作業（場所＋作業）。工数の行の備考に入れて、どの作業の工数かを分かるようにする */
+  function reportTaskNote(t) {
+    return [t.place, t.work].filter(Boolean).join(' ');
+  }
+
+  /** 工数にまだ取り込んでいない日報の作業 */
+  function pendingReportTasks(rep) {
+    return rep.tasks.filter((t) => reportTaskNote(t) && !sheet.rows.some((r) => r.note === reportTaskNote(t)));
   }
 
   function updateSheetTotal() {
@@ -588,20 +598,20 @@
     if (act === 'dup') $(`.work-row[data-key="${sheet.rows[i + 1].key}"] [data-f=workTypeId]`).focus();
   });
 
-  // 日報で工種を付けた作業を、工数の行として取り込む
+  // 日報の作業を工数の行として取り込む（場所＋作業を備考に入れる。工種は工数タブで選ぶ）
   $('#entry-crew').addEventListener('click', (ev) => {
     if (!ev.target.closest('#rows-from-report')) return;
     const rep = Core.findReport(state, sheet.date, sheet.siteId);
     if (!rep) return;
+    const tasks = pendingReportTasks(rep);
     sheet.rows = sheet.rows.filter((r) => !Core.isEmptyRow(r));
-    for (const t of rep.tasks) {
-      if (!t.workTypeId || sheet.rows.some((r) => r.workTypeId === t.workTypeId)) continue;
-      sheet.rows.push(makeRow({ workTypeId: t.workTypeId, people: 1, hours: 8, note: t.place }));
+    for (const t of tasks) {
+      sheet.rows.push(makeRow({ workTypeId: t.workTypeId || '', people: 1, hours: 8, note: reportTaskNote(t) }));
     }
     if (!sheet.rows.length) sheet.rows.push(newRowLike(null));
     markDirty();
     renderSheet();
-    toast('日報の作業を取り込みました。人数と時間を確認して保存してください');
+    toast('日報の作業を取り込みました。工種（小分類）と人数・時間を選んで保存してください');
   });
 
   $('#add-row').addEventListener('click', () => {
@@ -747,15 +757,6 @@
     updateReportStatus();
   }
 
-  /** 工種（任意）の選択肢。大分類ごとにまとめる */
-  function workTypeOptionsAll(selected) {
-    return '<option value="">工種（任意）</option>' + state.categories.map((c) => {
-      const items = Core.workTypesOfCategory(state, c.id);
-      return items.length ? `<optgroup label="${escapeHtml(c.name)}">${items.map((w) =>
-        `<option value="${escapeHtml(w.id)}" ${w.id === selected ? 'selected' : ''}>${escapeHtml(w.name)}</option>`).join('')}</optgroup>` : '';
-    }).join('');
-  }
-
   /** 作業の備考欄の案内文（途中のときは進み具合・できなかった理由を書いてもらう） */
   function memoPlaceholder(status) {
     return status === 'partial'
@@ -780,7 +781,6 @@
       </div>
       <input id="${id('memo')}" class="task-memo" data-tf="memo" type="text" value="${escapeHtml(t.memo)}"
         placeholder="${memoPlaceholder(t.status)}" aria-label="作業 ${i + 1} の備考">
-      <select id="${id('wt')}" class="task-wt" data-tf="workTypeId" aria-label="作業 ${i + 1} の工種（任意）">${workTypeOptionsAll(t.workTypeId)}</select>
     </div>`;
   }
 
@@ -795,7 +795,6 @@
         <input id="${id('place')}" data-pf="place" type="text" value="${escapeHtml(p.place)}" placeholder="場所" aria-label="予定 ${i + 1} の場所">
         <input id="${id('work')}" data-pf="work" type="text" value="${escapeHtml(p.work)}" placeholder="作業" aria-label="予定 ${i + 1} の内容">
       </div>
-      <select id="${id('wt')}" class="task-wt" data-pf="workTypeId" aria-label="予定 ${i + 1} の工種（任意）">${workTypeOptionsAll(p.workTypeId)}</select>
     </div>`;
   }
 
@@ -990,10 +989,6 @@
     // 手で直した予定は、今日の作業との連動をやめる
     p.fromTaskId = '';
     markReportDirty();
-  });
-  $('#rp-plans').addEventListener('change', (ev) => {
-    const p = planOf(ev.target);
-    if (p && ev.target.dataset.pf === 'workTypeId') { p.workTypeId = ev.target.value; markReportDirty(); }
   });
   $('#rp-add-plan').addEventListener('click', () => {
     const p = newPlan();

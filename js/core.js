@@ -397,6 +397,7 @@
     ['other', 'その他'],
   ];
 
+  // workTypeId: 日報では選ばない（旧バージョンのデータやサンプルにある場合は、工数への取り込みで使う）
   function normalizeTask(t) {
     // 旧バージョンの「未着手」「繰越」は「途中」として扱う
     const status = t.status === 'notyet' || t.status === 'carried' ? 'partial' : (t.status in TASK_STATUS ? t.status : '');
