@@ -601,3 +601,9 @@ test('normalizeState: 日報・予定を読み込む（旧データにはなく�
   assert.deepEqual(s.reports[0].crew, { own: 0, subs: [] });
   assert.deepEqual(Core.normalizeState({}).events, []);
 });
+
+test('出面は人工（0.5 刻みなど小数）で合計できる', () => {
+  const r = Core.normalizeReport({ crew: { own: 2.5, subs: [{ name: '△△電設', people: 1.5 }, { name: '○○電工', people: 0.5 }] } });
+  assert.equal(Core.crewTotal(r), 4.5);
+  assert.equal(Core.crewTotal(null), 0);
+});

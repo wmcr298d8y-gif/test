@@ -449,7 +449,7 @@
     const crew = Core.crewTotal(rep);
     const rest = Core.round2(crew - md);
     const withType = rep.tasks.filter((t) => t.workTypeId && !sheet.rows.some((r) => r.workTypeId === t.workTypeId));
-    el.innerHTML = `<div>日報の出面 <strong>${crew} 人</strong> のうち、工数に割り振り済み <strong>${fmt(md)} 人工</strong>
+    el.innerHTML = `<div>日報の出面 <strong>${fmt(crew)} 人工</strong> のうち、工数に割り振り済み <strong>${fmt(md)} 人工</strong>
       ${rest > 0 ? `<span class="pill active">残り ${fmt(rest)} 人工</span>` : rest < 0 ? `<span class="pill hard">出面より ${fmt(-rest)} 人工多い</span>` : '<span class="pill active">割り振り完了</span>'}</div>` +
       (withType.length ? `<button type="button" id="rows-from-report">日報の作業から工種を取り込む（${withType.length} 件）</button>` : '');
   }
@@ -472,7 +472,7 @@
       .map((r) => ({ site: state.sites.find((x) => x.id === r.siteId), crew: Core.crewTotal(r) })).filter((x) => x.site);
     $('#day-sites').innerHTML = sites.length
       ? `<span class="muted small">${formatDate(sheet.date)} の他の現場:</span> ` + sites.map(({ site, crew }) =>
-        `<button type="button" class="chip" data-goto-site="${escapeHtml(site.id)}">${escapeHtml(site.name)} ${crew}人</button>`).join('')
+        `<button type="button" class="chip" data-goto-site="${escapeHtml(site.id)}">${escapeHtml(site.name)} ${fmt(crew)}人工</button>`).join('')
       : '';
   }
 
@@ -754,9 +754,13 @@
     }).join('');
   }
 
+  /** 作業の備考欄の案内文（途中・未着手のときは進み具合を書いてもらう） */
+  function memoPlaceholder(status) {
+    return status === 'done' ? '備考（任意。確認済み・注意点など）' : 'どこまで進んだか・備考（例: 盤 2 面のうち 1 面済み）';
+  }
+
   function taskHtml(t, i) {
     const id = (f) => `task-${t.id}-${f}`;
-    const showMemo = t.status !== 'done' || t.memo;
     return `<div class="task status-${t.status}" data-task="${escapeHtml(t.id)}">
       <div class="task-head">
         <div class="task-status" role="group" aria-label="作業 ${i + 1} の状態">
@@ -768,8 +772,8 @@
         <input id="${id('place')}" data-tf="place" type="text" value="${escapeHtml(t.place)}" placeholder="場所（例: 2F 西側）" aria-label="作業 ${i + 1} の場所">
         <input id="${id('work')}" data-tf="work" type="text" value="${escapeHtml(t.work)}" placeholder="作業（例: 天井内配管）" aria-label="作業 ${i + 1} の内容">
       </div>
-      <input id="${id('memo')}" class="task-memo" data-tf="memo" type="text" value="${escapeHtml(t.memo)}" ${showMemo ? '' : 'hidden'}
-        placeholder="どこまで進んだか（例: 盤 2 面のうち 1 面済み）" aria-label="作業 ${i + 1} の進み具合">
+      <input id="${id('memo')}" class="task-memo" data-tf="memo" type="text" value="${escapeHtml(t.memo)}"
+        placeholder="${memoPlaceholder(t.status)}" aria-label="作業 ${i + 1} の備考">
       <select id="${id('wt')}" class="task-wt" data-tf="workTypeId" aria-label="作業 ${i + 1} の工種（任意）">${workTypeOptionsAll(t.workTypeId)}</select>
     </div>`;
   }
@@ -793,16 +797,16 @@
     const c = report.data.crew;
     const stepper = (key, value, label) => `<div class="stepper" data-crew-stepper="${key}">
         <button type="button" data-crew-step="-1" aria-label="${label}を減らす">▼</button>
-        <input type="number" min="0" max="999" step="1" inputmode="numeric" data-crew-people="${key}" value="${escapeHtml(value)}" aria-label="${label}">
+        <input type="number" min="0" max="999" step="0.5" inputmode="decimal" data-crew-people="${key}" value="${escapeHtml(value)}" aria-label="${label}">
         <button type="button" data-crew-step="1" aria-label="${label}を増やす">▲</button>
       </div>`;
-    return `<div class="crew-row"><span class="crew-name">自社</span>${stepper('own', c.own, '自社の人数')}<span class="crew-unit">人</span><span></span></div>` +
+    return `<div class="crew-row"><span class="crew-name">自社</span>${stepper('own', c.own, '自社の人工')}<span class="crew-unit">人工</span><span></span></div>` +
       c.subs.map((x, i) => `<div class="crew-row" data-sub="${i}">
         <input type="text" class="crew-name-input" data-sub-name="${i}" value="${escapeHtml(x.name)}" list="sub-names" placeholder="協力会社名" aria-label="協力会社 ${i + 1} の名前">
-        ${stepper('sub-' + i, x.people, `協力会社 ${i + 1} の人数`)}<span class="crew-unit">人</span>
+        ${stepper('sub-' + i, x.people, `協力会社 ${i + 1} の人工`)}<span class="crew-unit">人工</span>
         <button type="button" class="task-del danger" data-del-sub="${i}" aria-label="協力会社 ${i + 1} を削除">×</button>
       </div>`).join('') +
-      `<p class="crew-total">合計 <strong>${Core.crewTotal(report.data)} 人</strong></p>`;
+      `<p class="crew-total">合計 <strong>${fmt(Core.crewTotal(report.data))} 人工</strong><span class="muted small">（半日は 0.5）</span></p>`;
   }
 
   function renderReport() {
@@ -832,12 +836,12 @@
     const d = report.data;
     const tasks = d.tasks.filter((t) => t.place.trim() || t.work.trim());
     const count = (st) => tasks.filter((t) => t.status === st).length;
-    $('#rp-status').innerHTML = `出面 <strong>${Core.crewTotal(d)} 人</strong>・作業 ${tasks.length}` +
+    $('#rp-status').innerHTML = `出面 <strong>${fmt(Core.crewTotal(d))} 人工</strong>・作業 ${tasks.length}` +
       (tasks.length ? `<span class="muted small">（完了 ${count('done')}・途中 ${count('partial')}・未着手 ${count('notyet')}）</span>` : '') +
       (report.dirty ? ' <span class="unsaved">未保存</span>' : '');
     $('#rp-save').disabled = !report.dirty || Core.isSiteDone(state, d.siteId) || !d.siteId;
     const crewTotal = $('#rp-crew .crew-total strong');
-    if (crewTotal) crewTotal.textContent = `${Core.crewTotal(d)} 人`;
+    if (crewTotal) crewTotal.textContent = `${fmt(Core.crewTotal(d))} 人工`;
   }
 
   /** 途中・未着手の作業を明日の予定へ反映し、予定の欄を描き直す（入力中の欄のフォーカスは保つ） */
@@ -864,8 +868,10 @@
   });
 
   // 出面
+  /** 出面は人工で入力する（半日の人がいるので 0.5 刻み） */
+  const CREW_STEP = 0.5;
   function setCrewPeople(key, value) {
-    const v = Math.max(0, Math.min(999, Math.round(Number(value) || 0)));
+    const v = Math.max(0, Math.min(999, Math.round((Number(value) || 0) / CREW_STEP) * CREW_STEP));
     if (key === 'own') report.data.crew.own = v;
     else report.data.crew.subs[Number(key.slice(4))].people = v;
     return v;
@@ -875,7 +881,7 @@
     if (step) {
       const box = step.closest('[data-crew-stepper]');
       const input = box.querySelector('input');
-      input.value = setCrewPeople(box.dataset.crewStepper, (Number(input.value) || 0) + Number(step.dataset.crewStep));
+      input.value = setCrewPeople(box.dataset.crewStepper, (Number(input.value) || 0) + Number(step.dataset.crewStep) * CREW_STEP);
       markReportDirty();
       return;
     }
@@ -893,6 +899,12 @@
     if (name !== undefined) report.data.crew.subs[Number(name)].name = ev.target.value;
     markReportDirty();
   });
+  // 直接入力した人工は、入力を終えた時点で 0.5 刻みに丸めた値を表示する（例: 3.3 → 3.5）
+  $('#rp-crew').addEventListener('change', (ev) => {
+    const key = ev.target.dataset.crewPeople;
+    if (key) ev.target.value = setCrewPeople(key, ev.target.value);
+  });
+
   $('#rp-add-sub').addEventListener('click', () => {
     report.data.crew.subs.push({ name: '', people: 1 });
     $('#rp-crew').innerHTML = crewHtml();
@@ -911,8 +923,8 @@
       box.className = `task status-${t.status}`;
       box.querySelectorAll('[data-status]').forEach((x) => x.setAttribute('aria-pressed', String(x.dataset.status === t.status)));
       const memo = box.querySelector('[data-tf=memo]');
-      memo.hidden = t.status === 'done' && !t.memo;
-      if (t.status !== 'done') memo.focus();
+      memo.placeholder = memoPlaceholder(t.status);
+      if (t.status !== 'done' && !t.memo) memo.focus();
       refreshPlans();
       markReportDirty();
       return;
@@ -1076,16 +1088,16 @@
         <span class="pill st-${t.status}">${Core.TASK_STATUS[t.status]}</span>
         ${escapeHtml([t.place, t.work].filter(Boolean).join(' '))}${t.memo ? `<span class="muted"> … ${escapeHtml(t.memo)}</span>` : ''}</li>`).join('');
     const plans = r.tomorrow.map((p) => `<li>${escapeHtml([p.place, p.work].filter(Boolean).join(' '))}</li>`).join('');
-    const subs = r.crew.subs.map((x) => `${escapeHtml(x.name)} ${x.people}人`).join('、');
+    const subs = r.crew.subs.map((x) => `${escapeHtml(x.name)} ${fmt(x.people)}人工`).join('、');
     return `<details class="report-card">
       <summary>
         <strong>${formatDate(r.date)}</strong>
         ${r.weather ? `<span class="pill kind">${escapeHtml(r.weather)}</span>` : ''}
-        <span class="muted">出面 ${Core.crewTotal(r)}人・作業 ${r.tasks.length}${r.photos.length ? `・写真 ${r.photos.length}` : ''}</span>
+        <span class="muted">出面 ${fmt(Core.crewTotal(r))}人工・作業 ${r.tasks.length}${r.photos.length ? `・写真 ${r.photos.length}` : ''}</span>
         ${r.inputBy ? `<span class="muted small">入力 ${escapeHtml(names.employee(r.inputBy))}</span>` : ''}
       </summary>
       <div class="report-body">
-        <p class="small">出面: 自社 ${r.crew.own}人${subs ? `、${subs}` : ''}</p>
+        <p class="small">出面: 自社 ${fmt(r.crew.own)}人工${subs ? `、${subs}` : ''}</p>
         <h3>作業</h3><ul class="todo">${tasks || '<li class="muted">なし</li>'}</ul>
         <h3>翌日の予定</h3><ul class="todo">${plans || '<li class="muted">なし</li>'}</ul>
         ${r.notes ? `<h3>特記事項</h3><p class="pre">${escapeHtml(r.notes)}</p>` : ''}
@@ -1900,7 +1912,7 @@
 
   $('#backup-json').addEventListener('click', () => {
     const json = JSON.stringify(state, null, 2);
-    showExport({ title: 'バックアップ', filename: `工数記録_バックアップ_${stamp()}.json`, content: json, type: 'application/json', copyText: json });
+    showExport({ title: 'バックアップ', filename: `現場日報_バックアップ_${stamp()}.json`, content: json, type: 'application/json', copyText: json });
   });
 
   $('#restore-json').addEventListener('change', async (ev) => {

@@ -1,6 +1,6 @@
 {
-  "name": "現場工数記録",
-  "short_name": "工数記録",
+  "name": "現場日報",
+  "short_name": "現場日報",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",

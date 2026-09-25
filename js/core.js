@@ -440,10 +440,10 @@
     return `${String(x.place || '').trim()}|${String(x.work || '').trim()}`;
   }
 
-  /** 出面の合計人数 */
+  /** 出面の合計（人工。半日の人は 0.5 として入力する） */
   function crewTotal(report) {
     if (!report) return 0;
-    return (Number(report.crew.own) || 0) + report.crew.subs.reduce((sum, x) => sum + (Number(x.people) || 0), 0);
+    return round2((Number(report.crew.own) || 0) + report.crew.subs.reduce((sum, x) => sum + (Number(x.people) || 0), 0));
   }
 
   /** 空欄の作業・予定・協力会社の行を除いた日報 */
@@ -524,7 +524,7 @@
     if (isSiteDone(state, report.siteId)) errors.push('完工済みの現場のため保存できません（管理者が完工を解除すると入力できます）');
     const r = cleanReport(report);
     if (!r.tasks.length && !r.notes) errors.push('今日の作業を 1 つ以上入力してください（作業がない日は特記事項に理由を書いてください）');
-    if (r.crew.own < 0 || r.crew.subs.some((x) => x.people < 0)) errors.push('出面の人数は 0 以上にしてください');
+    if (r.crew.own < 0 || r.crew.subs.some((x) => x.people < 0)) errors.push('出面は 0 以上にしてください');
     if (r.crew.subs.some((x) => !x.name)) errors.push('協力会社の名前を入力してください');
     return errors;
   }
