@@ -264,6 +264,40 @@
     return makeRow(last ? { categoryId: last.categoryId, people: last.people, hours: last.hours, worker: last.worker } : {});
   }
 
+  // 増減ボタンの刻みと範囲（時間は 0.25h = 15 分刻み）
+  const STEPPERS = {
+    people: { step: 1, min: 1, max: 99, label: '人数' },
+    hours: { step: 0.25, min: 0.25, max: 24, label: '時間' },
+  };
+
+  /** 刻みに合わせて丸め、範囲内に収める */
+  function snapValue(f, value) {
+    const c = STEPPERS[f];
+    const n = Number(value);
+    if (!Number.isFinite(n)) return c.min;
+    const snapped = Math.round(n / c.step) * c.step;
+    return Math.min(c.max, Math.max(c.min, Core.round2(snapped)));
+  }
+
+  function rowCalcText(r) {
+    const mh = rowManHours(r);
+    return `延べ <strong>${fmt(mh)} h</strong><br>${fmt(Core.round2(mh / perDay()))} 人工`;
+  }
+
+  function stepperHtml(r, f, i) {
+    const c = STEPPERS[f];
+    const inputId = `${r.key}-${f}`;
+    return `<div class="num-field">
+      <label for="${inputId}">${f === 'hours' ? '時間(h/人)' : '人数'}</label>
+      <div class="stepper">
+        <button type="button" data-step="-1" data-f-target="${f}" aria-label="作業 ${i + 1} の${c.label}を減らす">▼</button>
+        <input id="${inputId}" data-f="${f}" type="number" min="${c.min}" max="${c.max}" step="${c.step}"
+          inputmode="${f === 'hours' ? 'decimal' : 'numeric'}" value="${escapeHtml(r[f])}">
+        <button type="button" data-step="1" data-f-target="${f}" aria-label="作業 ${i + 1} の${c.label}を増やす">▲</button>
+      </div>
+    </div>`;
+  }
+
   function rowManHours(r) {
     return Core.round2((Number(r.people) || 0) * (Number(r.hours) || 0));
   }
@@ -313,7 +347,6 @@
     return `<div class="work-row" data-key="${r.key}">
       <div class="work-row-head">
         <span class="work-no">作業 ${i + 1}</span>
-        <span class="work-mh" data-mh>${fmt(rowManHours(r))} h</span>
         <span class="work-row-actions">
           <button type="button" data-row-act="up" ${i === 0 ? 'disabled' : ''} aria-label="作業 ${i + 1} を上へ">↑</button>
           <button type="button" data-row-act="dup">複製</button>
@@ -325,15 +358,13 @@
         <select id="${id('wt')}" data-f="workTypeId" aria-label="作業 ${i + 1} の小分類">${workTypeOptions(r.categoryId, r.workTypeId)}</select>
       </div>
       <div class="work-nums">
-        <label for="${id('people')}">人数
-          <input id="${id('people')}" data-f="people" type="number" min="1" step="1" inputmode="numeric" value="${escapeHtml(r.people)}">
-        </label>
-        <label for="${id('hours')}">時間(h/人)
-          <input id="${id('hours')}" data-f="hours" type="number" min="0.25" max="24" step="0.25" inputmode="decimal" value="${escapeHtml(r.hours)}">
-        </label>
-        <label for="${id('qty')}">数量<span class="unit" data-unit>${escapeHtml(unitLabel(r.workTypeId))}</span>
+        ${stepperHtml(r, 'people', i)}
+        ${stepperHtml(r, 'hours', i)}
+        <div class="num-field">
+          <label for="${id('qty')}">数量<span class="unit" data-unit>${escapeHtml(unitLabel(r.workTypeId))}</span></label>
           <input id="${id('qty')}" data-f="quantity" type="number" min="0" step="any" inputmode="decimal" value="${escapeHtml(r.quantity)}" placeholder="任意">
-        </label>
+        </div>
+        <div class="row-calc" data-mh>${rowCalcText(r)}</div>
       </div>
       <details class="work-more" ${hasDetail ? 'open' : ''}>
         <summary>作業者・備考${hasDetail ? '' : ' <span class="muted">（任意）</span>'}</summary>
@@ -381,9 +412,66 @@
     const r = rowOf(ev.target);
     if (!f || !r || ev.target.tagName === 'SELECT') return;
     r[f] = ev.target.value;
-    if (f === 'people' || f === 'hours') ev.target.closest('.work-row').querySelector('[data-mh]').textContent = `${fmt(rowManHours(r))} h`;
+    if (f === 'people' || f === 'hours') ev.target.closest('.work-row').querySelector('[data-mh]').innerHTML = rowCalcText(r);
     markDirty();
   });
+
+  // 直接入力した人数・時間は、入力を終えた時点で刻みに合わせる（例: 7.3h → 7.25h）
+  $('#sheet-rows').addEventListener('focusout', (ev) => {
+    const f = ev.target.dataset.f;
+    if (!STEPPERS[f]) return;
+    const r = rowOf(ev.target);
+    const v = snapValue(f, ev.target.value);
+    if (String(v) === String(ev.target.value)) return;
+    ev.target.value = v;
+    r[f] = v;
+    ev.target.closest('.work-row').querySelector('[data-mh]').innerHTML = rowCalcText(r);
+    markDirty();
+  });
+
+  // ▲▼ボタン。押し続けると連続で増減する
+  function stepBy(btn) {
+    const f = btn.dataset.fTarget;
+    const r = rowOf(btn);
+    const input = btn.parentElement.querySelector('input');
+    const v = snapValue(f, (Number(input.value) || 0) + Number(btn.dataset.step) * STEPPERS[f].step);
+    input.value = v;
+    r[f] = v;
+    btn.closest('.work-row').querySelector('[data-mh]').innerHTML = rowCalcText(r);
+    markDirty();
+  }
+
+  let repeatTimer = null;
+  // 指・マウスで押した場合は pointerdown で増減済みなので、続く click では増減しない
+  let pointerStepped = false;
+  function stopRepeat() {
+    clearTimeout(repeatTimer);
+    clearInterval(repeatTimer);
+    repeatTimer = null;
+  }
+  $('#sheet-rows').addEventListener('pointerdown', (ev) => {
+    const btn = ev.target.closest('button[data-step]');
+    if (!btn || ev.button !== 0) return;
+    ev.preventDefault(); // 長押しで文字選択やメニューが出ないように
+    pointerStepped = true;
+    stepBy(btn);
+    stopRepeat();
+    repeatTimer = setTimeout(() => { repeatTimer = setInterval(() => stepBy(btn), 90); }, 450);
+  });
+  for (const type of ['pointerup', 'pointercancel', 'pointerleave']) {
+    $('#sheet-rows').addEventListener(type, stopRepeat, true);
+  }
+  $('#sheet-rows').addEventListener('contextmenu', (ev) => {
+    if (ev.target.closest('button[data-step]')) ev.preventDefault();
+  });
+  // キーボード操作（Enter / Space）ではクリックとして 1 回だけ増減する
+  $('#sheet-rows').addEventListener('click', (ev) => {
+    const btn = ev.target.closest('button[data-step]');
+    if (!btn) return;
+    if (pointerStepped) { pointerStepped = false; return; }
+    stepBy(btn);
+  });
+  $('#sheet-rows').addEventListener('keydown', () => { pointerStepped = false; });
 
   $('#sheet-rows').addEventListener('change', (ev) => {
     const f = ev.target.dataset.f;
