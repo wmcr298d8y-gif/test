@@ -849,8 +849,6 @@
     $('#rp-notes').value = d.notes;
     $('#rp-reflection').value = d.reflection;
     renderPhotos();
-    renderReplies();
-    renderReplyNotice();
     $('#sub-names').innerHTML = Core.subcontractorNames(state).map((n) => `<option value="${escapeHtml(n)}">`).join('');
     updateReportStatus();
   }
@@ -1052,68 +1050,6 @@
   $('#rp-notes').addEventListener('input', (ev) => { report.data.notes = ev.target.value; markReportDirty(); });
   $('#rp-reflection').addEventListener('input', (ev) => { report.data.reflection = ev.target.value; markReportDirty(); });
 
-  // ---------- 返信（本番は kintone のレコードのコメント機能を使う想定） ----------
-  function formatDateTime(ms) {
-    return new Date(ms).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-  }
-
-  function replyAuthor() {
-    const emp = state.employees.find((x) => x.id === form.elements.inputBy.value);
-    return emp ? `${emp.name}（管理者）` : '管理者';
-  }
-
-  /** 返信の欄。現場用は返信を読むだけ、管理者用は返信を書ける。読んだ返信の数を端末に記録する */
-  function renderReplies() {
-    const saved = Core.findReport(state, report.data.date, report.data.siteId);
-    const replies = saved ? saved.replies : [];
-    const admin = role() === 'admin';
-    const box = $('#rp-replies');
-    box.hidden = !saved || (!replies.length && !admin);
-    if (box.hidden) return;
-    box.innerHTML = `<h2>管理者からの返信</h2>
-      ${replies.length ? `<ul class="reply-list">${replies.map((x) => `<li>
-          <div class="reply-meta"><strong>${escapeHtml(x.author)}</strong> <span class="muted small">${formatDateTime(x.at)}</span></div>
-          <p class="pre">${escapeHtml(x.text)}</p></li>`).join('')}</ul>` : '<p class="muted small">まだ返信はありません。</p>'}
-      ${admin ? `<div class="reply-form">
-          <label for="rp-reply-text" class="visually-hidden">返信</label>
-          <textarea id="rp-reply-text" rows="2" placeholder="日報・ふりかえりへの返信（本番は kintone のコメント機能を使う想定）"></textarea>
-          <button type="button" class="primary" id="rp-reply-send">返信する</button>
-        </div>` : ''}`;
-    if (!admin && replies.length) {
-      const seen = state.settings.seenReplies || {};
-      if ((seen[saved.id] || 0) < replies.length) {
-        state.settings.seenReplies = { ...seen, [saved.id]: replies.length };
-        save();
-      }
-    }
-  }
-
-  /** 現場用: まだ読んでいない返信がある日報のお知らせ */
-  function renderReplyNotice() {
-    const box = $('#rp-reply-notice');
-    const list = role() === 'admin' || !report.data.siteId ? []
-      : Core.unreadReplies(state, report.data.siteId, state.settings.seenReplies || {}).filter((r) => r.date !== report.data.date);
-    box.hidden = !list.length;
-    box.innerHTML = list.length ? `<strong>管理者から返信があります</strong> ` + list.slice(0, 5).map((r) =>
-      `<button type="button" class="chip" data-open-reply="${escapeHtml(r.date)}">${formatDate(r.date)} の日報</button>`).join('') : '';
-  }
-
-  $('#rp-reply-notice').addEventListener('click', async (ev) => {
-    const b = ev.target.closest('[data-open-reply]');
-    if (!b || !await confirmDiscard()) return;
-    loadContext(b.dataset.openReply, report.data.siteId);
-    $('#rp-replies').scrollIntoView({ behavior: 'smooth', block: 'center' });
-  });
-
-  $('#rp-replies').addEventListener('click', (ev) => {
-    if (!ev.target.closest('#rp-reply-send')) return;
-    const res = Core.addReply(state, report.data.date, report.data.siteId, $('#rp-reply-text').value, replyAuthor());
-    if (res.error) { toast(res.error); return; }
-    save();
-    renderReplies();
-    toast('返信しました');
-  });
-
   // 写真（任意）。端末の容量を圧迫しないよう、長辺 1280px の JPEG に縮小して保存する
   const MAX_PHOTOS = 4;
   function resizeImage(file, maxSide = 1280, quality = 0.7) {
@@ -1215,7 +1151,7 @@
         <span class="pill st-${t.status}">${Core.TASK_STATUS[t.status] || '—'}</span>
         <span>${escapeHtml([t.place, t.work].filter(Boolean).join(' '))}${t.memo ? `<span class="muted"> … ${escapeHtml(t.memo)}</span>` : ''}
         ${t.photos.length ? `<span class="thumbs">${t.photos.map((ph) => thumbHtml(ph)).join('')}</span>` : ''}</span></li>`).join('');
-    // ふりかえりと返信は本人と管理者だけが見る（現場タブの履歴では管理者用のときだけ表示）
+    // ふりかえりは本人と管理者だけが見る（現場タブの履歴では管理者用のときだけ表示）
     const admin = role() === 'admin';
     const plans = r.tomorrow.map((p) => `<li>${escapeHtml([p.place, p.work].filter(Boolean).join(' '))}</li>`).join('');
     const subs = r.crew.subs.map((x) => `${escapeHtml(x.name)} ${fmt(x.people)}人工`).join('、');
@@ -1224,7 +1160,6 @@
         <strong>${formatDate(r.date)}</strong>
         ${r.weather ? `<span class="pill kind">${escapeHtml(r.weather)}</span>` : ''}
         <span class="muted">出面 ${fmt(Core.crewTotal(r))}人工・作業 ${r.tasks.length}${photoCount(r) ? `・写真 ${photoCount(r)}` : ''}</span>
-        ${role() === 'admin' && r.replies.length ? `<span class="pill active">返信 ${r.replies.length}</span>` : ''}
         ${role() === 'admin' && r.reflection ? '<span class="pill kind">ふりかえり</span>' : ''}
         ${r.inputBy ? `<span class="muted small">入力 ${escapeHtml(names.employee(r.inputBy))}</span>` : ''}
       </summary>
@@ -1234,7 +1169,6 @@
         <h3>翌日の予定</h3><ul class="todo">${plans || '<li class="muted">なし</li>'}</ul>
         ${r.notes ? `<h3>特記事項</h3><p class="pre">${escapeHtml(r.notes)}</p>` : ''}
         ${admin && r.reflection ? `<h3>ふりかえり <span class="pill kind">本人と管理者のみ</span></h3><p class="pre">${escapeHtml(r.reflection)}</p>` : ''}
-        ${admin && r.replies.length ? `<h3>返信</h3><ul class="reply-list">${r.replies.map((x) => `<li><div class="reply-meta"><strong>${escapeHtml(x.author)}</strong> <span class="muted small">${formatDateTime(x.at)}</span></div><p class="pre">${escapeHtml(x.text)}</p></li>`).join('')}</ul>` : ''}
         ${r.photos.length ? `<div class="photos">${r.photos.map((ph) => `<figure class="photo"><img src="${escapeHtml(ph.dataUrl)}" alt="${escapeHtml(ph.caption || '現場写真')}">${ph.caption ? `<figcaption>${escapeHtml(ph.caption)}</figcaption>` : ''}</figure>`).join('')}</div>` : ''}
       </div>
     </details>`;

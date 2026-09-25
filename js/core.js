@@ -434,8 +434,6 @@
       photos: r.photos || [],
       // ふりかえり（良かった点・うまくいかなかった点）。現場タブの履歴には出さず、本人と管理者だけが見る
       reflection: r.reflection || '',
-      // 上司・管理者からの返信 [{ id, author, text, at }]
-      replies: (r.replies || []).map((x) => ({ id: x.id || newId(), author: x.author || '', text: x.text || '', at: x.at || 0 })),
       createdAt: r.createdAt || 0,
       updatedAt: r.updatedAt || 0,
     };
@@ -562,29 +560,9 @@
     const prev = findReport(state, clean.date, clean.siteId);
     clean.id = prev ? prev.id : clean.id;
     clean.createdAt = prev ? prev.createdAt : now;
-    // 返信は日報の編集では変えない（書き直しても管理者の返信は消えない）
-    clean.replies = prev ? prev.replies : [];
     clean.updatedAt = now;
     state.reports = state.reports.filter((r) => r !== prev).concat(clean);
     return { errors: [], report: clean };
-  }
-
-  /** 保存済みの日報に返信を付ける。戻り値: { error, reply } */
-  function addReply(state, date, siteId, text, author, now = Date.now()) {
-    const rep = findReport(state, date, siteId);
-    if (!rep) return { error: '保存済みの日報にだけ返信できます', reply: null };
-    const body = String(text || '').trim();
-    if (!body) return { error: '返信を入力してください', reply: null };
-    const reply = { id: newId(), author: author || '管理者', text: body, at: now };
-    rep.replies.push(reply);
-    return { error: '', reply };
-  }
-
-  /**
-   * まだ読んでいない返信がある日報（新しい順）。seen は { 日報ID: 読んだ返信の数 }（端末ごとに保存）
-   */
-  function unreadReplies(state, siteId, seen = {}) {
-    return reportsOfSite(state, siteId).filter((r) => r.replies.length > (seen[r.id] || 0));
   }
 
   /** 指定日以降の予定（検査・打合せ・搬入など）。古い順 */
@@ -1007,11 +985,10 @@
       });
     }
 
-    // ふりかえりと管理者からの返信の例（A 現場の 2 日前の日報）
+    // ふりかえりの例（A 現場の 2 日前の日報）
     const aReports = reportsOfSite(state, sites[0].id);
     if (aReports[2]) {
       aReports[2].reflection = '午前中に資材を各階へ上げておいたので、午後の配管がスムーズに進んだ。3F は天井材が先行しているので明日は脚立の段取りを先に。';
-      aReports[2].replies.push({ id: newId(), author: '管理者', text: '段取りの工夫、良いですね。資材の先行搬入は B 現場にも共有します。', at: aReports[2].updatedAt + 3 * 3600 * 1000 });
     }
 
     // 現場ノートと予定（稼働中の現場）
@@ -1042,7 +1019,7 @@
   const Core = {
     addSampleData, isEmptyRow, isSiteDone, dayEntries, saveDaySheet, previousDayRows,
     WEATHERS, TASK_STATUS, NOTEBOOK_FIELDS, normalizeReport, findReport, reportsOfSite, previousReport,
-    draftReport, syncCarryOver, validateReport, addReply, unreadReplies, saveReport, crewTotal, upcomingEvents, reportSubmission, subcontractorNames,
+    draftReport, syncCarryOver, validateReport, saveReport, crewTotal, upcomingEvents, reportSubmission, subcontractorNames,
     monthlyMatrix, siteDateRange, siteLabel, normalizeSite,
     DEFAULT_TAXONOMY, DEFAULT_SITE_KINDS, UNCATEGORIZED, emptyState,
     companyRates, companyRatesToCsv, mergeDefaultTaxonomy, defaultUnit,
