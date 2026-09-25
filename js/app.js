@@ -279,6 +279,7 @@
       people: src.people ?? 1,
       hours: src.hours ?? 8,
       quantity: Core.isBlank(src.quantity) ? '' : src.quantity,
+      hard: !!src.hard,
       note: src.note || '',
     };
   }
@@ -384,6 +385,9 @@
     return `<div class="work-row" data-key="${r.key}">
       <div class="work-row-head">
         <span class="work-no">作業 ${i + 1}</span>
+        <label class="hard-toggle" for="${id('hard')}" title="高所・狭所など、通常より手間のかかる作業">
+          <input id="${id('hard')}" type="checkbox" data-f="hard" ${r.hard ? 'checked' : ''}> 難
+        </label>
         <span class="work-row-actions">
           <button type="button" data-row-act="up" ${i === 0 ? 'disabled' : ''} aria-label="作業 ${i + 1} を上へ">↑</button>
           <button type="button" data-row-act="dup">複製</button>
@@ -404,7 +408,7 @@
         <div class="row-calc" data-mh>${rowCalcText(r)}</div>
       </div>
       <details class="work-more" ${hasDetail ? 'open' : ''}>
-        <summary>備考${hasDetail ? '' : ' <span class="muted">（任意）</span>'}</summary>
+        <summary>備考${hasDetail ? '' : ' <span class="muted">（任意。「難」の理由など）</span>'}</summary>
         <div class="work-more-body">
           <input id="${id('note')}" data-f="note" type="text" value="${escapeHtml(r.note)}" placeholder="場所・内容など" aria-label="作業 ${i + 1} の備考">
         </div>
@@ -453,7 +457,7 @@
     const f = ev.target.dataset.f;
     const r = rowOf(ev.target);
     if (!f || !r || ev.target.tagName === 'SELECT') return;
-    r[f] = ev.target.value;
+    r[f] = ev.target.type === 'checkbox' ? ev.target.checked : ev.target.value;
     if (f === 'people' || f === 'hours') ev.target.closest('.work-row').querySelector('[data-mh]').innerHTML = rowCalcText(r);
     markDirty();
   });
@@ -679,7 +683,7 @@
       const time = e.start && e.end ? `${e.start}〜${e.end}（休憩${e.breakMinutes || 0}分）` : '';
       return `<li class="card">
         <div class="card-main">
-          <div class="card-title"><span class="tag-cat">${escapeHtml(names.categoryOfWorkType(e.workTypeId))} ›</span><span class="tag">${escapeHtml(names.workType(e.workTypeId))}</span> ${escapeHtml(names.site(e.siteId))}</div>
+          <div class="card-title"><span class="tag-cat">${escapeHtml(names.categoryOfWorkType(e.workTypeId))} ›</span><span class="tag">${escapeHtml(names.workType(e.workTypeId))}</span>${e.hard ? '<span class="pill hard">難</span> ' : ' '}${escapeHtml(names.site(e.siteId))}</div>
           <div class="card-sub">${formatDate(e.date)} ${e.people}人 × ${fmt(e.hours)}h ${escapeHtml(time)}${e.inputBy ? `・入力 ${escapeHtml(names.employee(e.inputBy))}` : ''}</div>
           ${Core.isBlank(e.quantity) ? '' : `<div class="card-sub">数量 <strong>${fmt(e.quantity)} ${escapeHtml(unitOf(e.workTypeId))}</strong></div>`}
           ${e.note ? `<div class="card-note">${escapeHtml(e.note)}</div>` : ''}
@@ -789,19 +793,9 @@
       <div class="stat"><span>稼働日数</span><strong>${new Set(entries.map((e) => e.date)).size}<small> 日</small></strong></div>
       <div class="stat"><span>工種数</span><strong>${new Set(entries.map((e) => e.workTypeId)).size}</strong></div>`;
 
-    // 管理者はマスタとの比較も表示する（比較するマスタは「集計」で選んだもの）
-    const compareIds = role() === 'admin' ? state.settings.compareMasterIds : [];
-    const rows = Core.compareStandards(
-      Core.productivity(entries, state.workTypes, perDay(), { bySite: true, categories: state.categories }),
-      state, compareIds);
+    const rows = Core.productivity(entries, state.workTypes, perDay(), { bySite: true, categories: state.categories });
     const names = Core.nameLookup(state);
-    const masterName = new Map(compareOptions().map((o) => [o.id, o.name]));
     const dash = '<span class="muted">—</span>';
-    const stdCell = (st) => {
-      if (st.rate === null) return dash;
-      const ratio = st.ratio === null ? '' : `<div class="${st.ratio > 100 ? 'over' : 'under'}">${fmt(st.ratio)}%</div>`;
-      return `<div>${fmt(st.rate, 3)}</div>${ratio}`;
-    };
     // 大分類ごとに小計行を入れる
     let html = '';
     let currentCat = null;
@@ -811,7 +805,7 @@
       if (r.categoryId !== currentCat) {
         currentCat = r.categoryId;
         html += `<tr class="cat-row"><th>${escapeHtml(names.category(r.categoryId))}</th>
-          <td></td><td class="num">${fmt(catTotals.get(r.categoryId))}</td><td colspan="${3 + compareIds.length}"></td></tr>`;
+          <td></td><td class="num">${fmt(catTotals.get(r.categoryId))}</td><td colspan="3"></td></tr>`;
       }
       const unit = escapeHtml(r.unit);
       html += `<tr>
@@ -819,7 +813,6 @@
         <td class="num">${r.quantity > 0 ? `${fmt(r.quantity)} ${unit}` : '<span class="muted">未入力</span>'}</td>
         <td class="num">${fmt(r.manDays)}</td>
         <td class="num rate-val">${r.rate === null ? dash : `${fmt(r.rate, 3)}<br><small>人工/${unit || '単位'}</small>`}</td>
-        ${compareIds.map((id) => `<td class="num std-cell">${stdCell(r.standards[id])}</td>`).join('')}
         <td class="num">${r.output === null ? dash : `${fmt(r.output)} ${unit}`}</td>
         <td class="num">${r.days}日</td>
       </tr>`;
@@ -828,12 +821,11 @@
       <thead><tr>
         <th>工種</th><th class="num">数量</th><th class="num">人工</th>
         <th class="num">実績歩掛り<br><small>人工/単位</small></th>
-        ${compareIds.map((id) => `<th class="num std-head">${escapeHtml(masterName.get(id) || '')}<br><small>歩掛り / 対比</small></th>`).join('')}
         <th class="num">1人工あたり<br><small>施工量</small></th>
         <th class="num">稼働日</th>
       </tr></thead>
       <tbody>${html}</tbody>
-      <tfoot><tr><th>合計</th><td></td><td class="num">${fmt(Core.round2(total / perDay()))}</td><td colspan="${3 + compareIds.length}"></td></tr></tfoot>
+      <tfoot><tr><th>合計</th><td></td><td class="num">${fmt(Core.round2(total / perDay()))}</td><td colspan="3"></td></tr></tfoot>
     </table>`;
   }
 
@@ -950,62 +942,20 @@
     </table>`;
   }
 
-  function compareOptions() {
-    return [
-      ...state.rateMasters.map((m) => ({ id: m.id, name: m.name })),
-      ...(state.rateMasters.length ? [{ id: Core.SITE_MASTER, name: '各現場の元請マスタ' }] : []),
-    ];
-  }
-
-  function renderComparePick() {
-    const opts = compareOptions();
-    const chosen = new Set(state.settings.compareMasterIds);
-    $('#compare-pick').innerHTML = opts.length
-      ? '<span class="label">比較:</span>' + opts.map((o) =>
-        `<label class="chip"><input type="checkbox" data-compare="${escapeHtml(o.id)}" ${chosen.has(o.id) ? 'checked' : ''}>${escapeHtml(o.name)}</label>`).join('')
-      : '<span class="muted small">「歩掛り」タブでマスタを登録すると、実績と比較できます。</span>';
-  }
-
-  $('#compare-pick').addEventListener('change', (ev) => {
-    const cb = ev.target.closest('input[data-compare]');
-    if (!cb) return;
-    const id = cb.dataset.compare;
-    const ids = state.settings.compareMasterIds.filter((x) => x !== id);
-    if (cb.checked) ids.push(id);
-    // 表示順はマスタの登録順に揃える
-    const order = compareOptions().map((o) => o.id);
-    state.settings.compareMasterIds = ids.sort((a, b) => order.indexOf(a) - order.indexOf(b));
-    // 「各現場の元請マスタ」は現場ごと表示でないと比較できないので自動で切り替える
-    if (id === Core.SITE_MASTER && cb.checked) $('#rate-by-site').checked = true;
-    save();
-    renderSummary();
-  });
-
   function renderRates(entries) {
-    renderComparePick();
     const bySite = $('#rate-by-site').checked;
-    const compareIds = state.settings.compareMasterIds;
-    const base = Core.productivity(entries, state.workTypes, perDay(), { bySite, categories: state.categories });
-    const rows = Core.compareStandards(base, state, compareIds);
+    const rows = Core.productivity(entries, state.workTypes, perDay(), { bySite, categories: state.categories });
     if (!rows.length) {
       $('#summary-rates').innerHTML = '<p class="muted">データがありません</p>';
       return;
     }
     const names = Core.nameLookup(state);
-    const masterName = new Map(compareOptions().map((o) => [o.id, o.name]));
     const dash = '<span class="muted">—</span>';
-    const stdCell = (st) => {
-      if (st.rate === null) return dash;
-      // マスタより手間がかかっている（100% 超）なら赤、少ないなら緑
-      const ratio = st.ratio === null ? '' : `<div class="${st.ratio > 100 ? 'over' : 'under'}">${fmt(st.ratio)}%</div>`;
-      return `<div>${fmt(st.rate, 3)}</div>${ratio}`;
-    };
     // スマホで横スクロールしなくても要点が見えるよう、工種名の次に実績歩掛りと比較を置く
     $('#summary-rates').innerHTML = `<table class="rates">
       <thead><tr>
         <th>${bySite ? '現場 / ' : ''}工種</th>
         <th class="num">実績歩掛り<br><small>人工/単位</small></th>
-        ${compareIds.map((id) => `<th class="num std-head">${escapeHtml(masterName.get(id) || '')}<br><small>歩掛り / 対比</small></th>`).join('')}
         <th class="num">数量</th><th class="num">人工</th>
         <th class="num">1人工あたり<br><small>施工量</small></th>
         <th class="num">稼働日<br><small>(数量記録日)</small></th>
@@ -1019,7 +969,6 @@
             <div>${escapeHtml(names.workType(r.workTypeId))}</div>
           </td>
           <td class="num rate-val">${r.rate === null ? dash : `${fmt(r.rate, 3)}<br><small>人工/${unit || '単位'}</small>`}</td>
-          ${compareIds.map((id) => `<td class="num std-cell">${stdCell(r.standards[id])}</td>`).join('')}
           <td class="num">${r.quantity > 0 ? `${fmt(r.quantity)} ${unit}` : '<span class="muted">未入力</span>'}</td>
           <td class="num">${fmt(r.manDays)}</td>
           <td class="num">${r.output === null ? dash : `${fmt(r.output)} ${unit}`}</td>
@@ -1060,6 +1009,7 @@
   function usageCount(key, id) {
     if (key === 'sites') return state.entries.filter((e) => e.siteId === id).length;
     if (key === 'employees') return state.entries.filter((e) => e.inputBy === id).length;
+    if (key === 'siteKinds') return state.sites.filter((x) => x.kindId === id).length;
     if (key === 'workTypes') return state.entries.filter((e) => e.workTypeId === id).length;
     if (key === 'categories') {
       const ids = new Set(Core.workTypesOfCategory(state, id).map((w) => w.id));
@@ -1119,7 +1069,8 @@
     return `<li class="site-row ${done ? 'is-done' : ''}">
       <div class="site-main">
         <span class="master-name"><strong>${escapeHtml(x.code || '（作番なし）')}</strong> ${escapeHtml(x.name)}
-          ${done ? '<span class="pill done">完工</span>' : '<span class="pill active">稼働中</span>'}</span>
+          ${done ? '<span class="pill done">完工</span>' : '<span class="pill active">稼働中</span>'}
+          ${kindName(x) ? `<span class="pill kind">${escapeHtml(kindName(x))}</span>` : ''}</span>
         <span class="rm-meta">${used ? `記録 ${used} 件・${formatDate(range.first)}〜${formatDate(range.last)}` : '記録なし'}</span>
       </div>
       <div class="site-fields">
@@ -1132,15 +1083,20 @@
         <label for="${rid('done')}">完工日
           <input id="${rid('done')}" type="date" data-site-field="completedOn" data-id="${x.id}" value="${escapeHtml(x.completedOn || '')}" ${done ? '' : 'disabled'}>
         </label>
-        <label for="${rid('master')}">元請の歩掛りマスタ
-          <select id="${rid('master')}" data-site-field="rateMasterId" data-id="${x.id}">
+        <label for="${rid('kind')}">工事区分
+          <select id="${rid('kind')}" data-site-field="kindId" data-id="${x.id}">
             <option value="">未設定</option>
-            ${state.rateMasters.map((m) => `<option value="${escapeHtml(m.id)}" ${m.id === x.rateMasterId ? 'selected' : ''}>${escapeHtml(m.name)}</option>`).join('')}
+            ${state.siteKinds.map((k) => `<option value="${escapeHtml(k.id)}" ${k.id === x.kindId ? 'selected' : ''}>${escapeHtml(k.name)}</option>`).join('')}
           </select>
         </label>
         <button type="button" data-master-act="del" data-key="sites" data-id="${x.id}" class="danger mock-only" title="モック用。本番では kintone の現場アプリで管理">削除</button>
       </div>
     </li>`;
+  }
+
+  function kindName(site) {
+    const k = state.siteKinds.find((x) => x.id === site.kindId);
+    return k ? k.name : '';
   }
 
   function employeeRow(x) {
@@ -1158,6 +1114,7 @@
     const sites = [...state.sites].sort((a, b) =>
       (a.status === 'done') - (b.status === 'done') || String(a.code).localeCompare(String(b.code)));
     $('#master-sites').innerHTML = sites.length ? sites.map(siteRow).join('') : '<li class="muted">未登録</li>';
+    $('#master-siteKinds').innerHTML = simpleList('siteKinds');
     $('#master-employees').innerHTML = state.employees.length
       ? state.employees.map(employeeRow).join('') : '<li class="muted">未登録</li>';
     $('#master-categories').innerHTML = simpleList('categories',
@@ -1233,11 +1190,12 @@
         return;
       }
       const used = usageCount(key, id);
-      const msg = used
-        ? `「${list[i].name}」は ${used} 件の記録で使われています。削除すると記録の表示が「(削除済み)」になります。削除しますか？`
-        : `「${list[i].name}」を削除しますか？`;
+      const msg = !used ? `「${list[i].name}」を削除しますか？`
+        : key === 'siteKinds' ? `「${list[i].name}」は ${used} 件の現場で使われています。削除するとそれらの現場の工事区分は未設定になります。削除しますか？`
+          : `「${list[i].name}」は ${used} 件の記録で使われています。削除すると記録の表示が「(削除済み)」になります。削除しますか？`;
       if (!await askConfirm(msg, { ok: '削除する', danger: true })) return;
       list.splice(i, 1);
+      if (key === 'siteKinds') state.sites.forEach((x) => { if (x.kindId === id) x.kindId = ''; });
     }
     save();
     render();
@@ -1302,159 +1260,84 @@
     }
   });
 
-  // ---------- 歩掛りマスタ ----------
-  let editingMasterId = '';
-  const openRateGroups = new Set();
-
-  function editingMaster() {
-    return state.rateMasters.find((m) => m.id === editingMasterId) || null;
+  // ---------- 自社の実績歩掛り ----------
+  function companyRateOptions() {
+    return {
+      doneOnly: $('#cr-target').value !== 'all',
+      kindId: $('#cr-kind').value,
+      difficulty: $('#cr-diff').value,
+      from: $('#cr-from').value,
+      to: $('#cr-to').value,
+    };
   }
 
-  function renderRateMasters() {
-    if (!editingMaster()) editingMasterId = '';
-    $('#rm-list').innerHTML = state.rateMasters.length ? state.rateMasters.map((m, i) => {
-      const count = Object.keys(m.rates).length;
-      const sites = state.sites.filter((x) => x.rateMasterId === m.id).length;
-      return `<li class="${m.id === editingMasterId ? 'selected' : ''}">
-        <span class="master-name">${escapeHtml(m.name)}
-          <span class="rm-meta">登録 ${count} 件${sites ? `・現場 ${sites} 件で使用` : ''}${m.note ? `・${escapeHtml(m.note)}` : ''}</span>
-        </span>
-        <span class="master-actions">
-          <button type="button" data-rm-act="edit" data-id="${m.id}">${m.id === editingMasterId ? '編集中' : '編集'}</button>
-          <button type="button" data-rm-act="up" data-id="${m.id}" ${i === 0 ? 'disabled' : ''} aria-label="上へ">↑</button>
-          <button type="button" data-rm-act="copy" data-id="${m.id}">複製</button>
-          <button type="button" data-rm-act="rename" data-id="${m.id}">名前変更</button>
-          <button type="button" data-rm-act="del" data-id="${m.id}" class="danger">削除</button>
-        </span>
-      </li>`;
-    }).join('') : '<li class="muted">未登録（例: 「国交省 R7年度」「○○建設」などを追加してください）</li>';
-
-    const m = editingMaster();
-    $('#rm-editor').hidden = !m;
-    if (!m) return;
-    $('#rm-title').textContent = `「${m.name}」の歩掛り`;
-    if (document.activeElement !== $('#rm-note')) $('#rm-note').value = m.note || '';
-    const onlySet = $('#rm-only-set').checked;
-    $('#rm-rates').innerHTML = state.categories.map((c) => {
-      const items = Core.workTypesOfCategory(state, c.id).filter((w) => !onlySet || Core.rateOf(m, w.id) !== null);
-      if (!items.length && onlySet) return '';
-      const setCount = items.filter((w) => Core.rateOf(m, w.id) !== null).length;
-      return `<details class="wt-group" data-cat="${escapeHtml(c.id)}" ${openRateGroups.has(c.id) || onlySet ? 'open' : ''}>
-        <summary>${escapeHtml(c.name)} <small class="muted">${setCount} / ${items.length} 登録</small></summary>
-        <ul class="master-list">${items.map((w) => {
-          const r = Core.rateOf(m, w.id);
-          return `<li class="rm-row">
-            <span class="master-name">${escapeHtml(w.name)}</span>
-            <span class="rm-input">
-              <input type="number" min="0" step="any" inputmode="decimal" data-rm-rate="${escapeHtml(w.id)}" value="${r === null ? '' : r}" placeholder="未登録" aria-label="${escapeHtml(w.name)} の歩掛り">
-              <span class="unit">人工/${escapeHtml(w.unit || '単位')}</span>
-            </span>
-          </li>`;
-        }).join('') || '<li class="muted">小分類なし</li>'}</ul>
-      </details>`;
-    }).join('') || '<p class="muted">登録済みの歩掛りはありません</p>';
+  /** 画面と CSV に出す条件の説明 */
+  function companyRateCondition(o) {
+    const kind = state.siteKinds.find((k) => k.id === o.kindId);
+    return [
+      o.doneOnly ? '完工した現場のみ' : '稼働中の現場を含む',
+      `工事区分: ${kind ? kind.name : 'すべて'}`,
+      `難度: ${{ all: 'すべて', normal: '標準のみ', hard: '難のみ' }[o.difficulty]}`,
+      (o.from || o.to) ? `記録日: ${o.from ? formatDateLong(o.from) : '最初'}〜${o.to ? formatDateLong(o.to) : '最新'}` : '',
+    ].filter(Boolean).join(' / ');
   }
 
-  $('#rm-rates').addEventListener('toggle', (ev) => {
-    const d = ev.target;
-    if (!d.dataset || !d.dataset.cat || $('#rm-only-set').checked) return;
-    if (d.open) openRateGroups.add(d.dataset.cat); else openRateGroups.delete(d.dataset.cat);
-  }, true);
-
-  $('#rm-add').addEventListener('submit', (ev) => {
-    ev.preventDefault();
-    const name = ev.target.elements.name.value.trim();
-    if (!name) return;
-    if (state.rateMasters.some((m) => m.name === name)) { toast('同じ名前のマスタがあります'); return; }
-    editingMasterId = Core.addRateMaster(state, name).id;
-    ev.target.reset();
-    save();
-    render();
-  });
-
-  $('#rm-list').addEventListener('click', async (ev) => {
-    const b = ev.target.closest('button[data-rm-act]');
-    if (!b) return;
-    const list = state.rateMasters;
-    const i = list.findIndex((m) => m.id === b.dataset.id);
-    if (i < 0) return;
-    const m = list[i];
-    const act = b.dataset.rmAct;
-    if (act === 'edit') {
-      editingMasterId = m.id;
-      render();
-      $('#rm-editor').scrollIntoView({ behavior: 'smooth' });
+  function renderCompanyRates() {
+    const o = companyRateOptions();
+    const rows = Core.companyRates(state, o, perDay());
+    const names = Core.nameLookup(state);
+    const siteMap = new Map(state.sites.map((x) => [x.id, x]));
+    const targetSites = new Set(state.entries.filter((e) => {
+      const site = siteMap.get(e.siteId);
+      return site && (!o.doneOnly || site.status === 'done') && (!o.kindId || site.kindId === o.kindId);
+    }).map((e) => e.siteId));
+    $('#cr-summary').innerHTML = `<strong>${escapeHtml(companyRateCondition(o))}</strong>
+      <span class="muted">対象 ${targetSites.size} 現場・${rows.filter((r) => r.rate !== null).length} 工種</span>`;
+    if (!rows.length) {
+      $('#cr-table').innerHTML = `<p class="muted">${o.doneOnly ? '完工した現場の記録がありません。「対象の現場」を「稼働中の現場も含める」にすると途中の値を確認できます。' : '記録がありません'}</p>`;
       return;
     }
-    if (act === 'up' && i > 0) {
-      [list[i - 1], list[i]] = [list[i], list[i - 1]];
-    } else if (act === 'copy') {
-      const name = await askText('複製したマスタの名前', m.name + ' のコピー');
-      if (!name) return;
-      editingMasterId = Core.addRateMaster(state, name, { note: m.note, copyFromId: m.id }).id;
-    } else if (act === 'rename') {
-      const name = await askText('新しい名前', m.name);
-      if (!name) return;
-      m.name = name;
-    } else if (act === 'del') {
-      const sites = state.sites.filter((x) => x.rateMasterId === m.id);
-      const msg = `歩掛りマスタ「${m.name}」（${Object.keys(m.rates).length} 件）を削除しますか？` +
-        (sites.length ? `\n現場 ${sites.length} 件の元請マスタ設定も解除されます。` : '');
-      if (!await askConfirm(msg, { ok: '削除する', danger: true })) return;
-      list.splice(i, 1);
-      sites.forEach((x) => { x.rateMasterId = ''; });
-      state.settings.compareMasterIds = state.settings.compareMasterIds.filter((id) => id !== m.id);
-      if (!list.length) state.settings.compareMasterIds = [];
+    const dash = '<span class="muted">—</span>';
+    let body = '';
+    let currentCat = null;
+    for (const r of rows) {
+      if (r.categoryId !== currentCat) {
+        currentCat = r.categoryId;
+        body += `<tr class="cat-row"><th colspan="8">${escapeHtml(names.category(r.categoryId))}</th></tr>`;
+      }
+      const unit = escapeHtml(r.unit);
+      const few = r.rate !== null && r.sites <= 2;
+      body += `<tr>
+        <td class="wt-cell">${escapeHtml(names.workType(r.workTypeId))}${few ? ' <span class="pill few">参考</span>' : ''}</td>
+        <td class="num rate-val">${r.rate === null ? dash : `${fmt(r.rate, 3)}<br><small>人工/${unit || '単位'}</small>`}</td>
+        <td class="num">${r.sites}${r.sitesNoQuantity ? `<br><small class="muted">数量なし ${r.sitesNoQuantity}</small>` : ''}</td>
+        <td class="num">${r.siteMin === null ? dash : r.siteMin === r.siteMax ? fmt(r.siteMin, 3) : `${fmt(r.siteMin, 3)}〜<br>${fmt(r.siteMax, 3)}`}</td>
+        <td class="num">${r.output === null ? dash : `${fmt(r.output)} ${unit}`}</td>
+        <td class="num">${r.quantity > 0 ? `${fmt(r.quantity)} ${unit}` : dash}</td>
+        <td class="num">${fmt(r.manDays)}</td>
+        <td class="num">${r.hardShare ? `${fmt(r.hardShare, 0)}%` : ''}</td>
+      </tr>`;
     }
-    save();
-    render();
-  });
+    $('#cr-table').innerHTML = `<table class="rates company">
+      <thead><tr>
+        <th>工種</th>
+        <th class="num">実績歩掛り</th>
+        <th class="num">現場数</th>
+        <th class="num">現場ごとの<br>最小〜最大</th>
+        <th class="num">1人工あたり<br>施工量</th>
+        <th class="num">数量合計</th>
+        <th class="num">人工合計</th>
+        <th class="num">難の<br>割合</th>
+      </tr></thead>
+      <tbody>${body}</tbody>
+    </table>`;
+  }
 
-  $('#rm-note').addEventListener('change', (ev) => {
-    const m = editingMaster();
-    if (!m) return;
-    m.note = ev.target.value.trim();
-    save();
-    render();
-  });
-
-  $('#rm-only-set').addEventListener('change', renderRateMasters);
-
-  $('#rm-rates').addEventListener('change', (ev) => {
-    const input = ev.target.closest('input[data-rm-rate]');
-    const m = editingMaster();
-    if (!input || !m) return;
-    if (!Core.setRate(m, input.dataset.rmRate, input.value.trim())) {
-      toast('歩掛りは 0 以上の数値で入力してください');
-      const r = Core.rateOf(m, input.dataset.rmRate);
-      input.value = r === null ? '' : r;
-      return;
-    }
-    save();
-    renderRateMasters();
-    toast('保存しました');
-  });
-
-  $('#rm-export').addEventListener('click', () => {
-    const m = editingMaster();
-    if (m) exportCsv(`「${m.name}」の CSV`, `歩掛りマスタ_${m.name.replace(/[\\/:*?"<>|]/g, '_')}_${stamp()}.csv`, Core.rateMasterToCsv(state, m));
-  });
-
-  $('#rm-import').addEventListener('change', async (ev) => {
-    const file = ev.target.files[0];
-    ev.target.value = '';
-    const m = editingMaster();
-    if (!file || !m) return;
-    try {
-      const { updated, createdWorkTypes, errors } = Core.importRateMasterCsv(state, m, await readFile(file));
-      save();
-      render();
-      showAlert(`「${m.name}」に ${updated} 件の歩掛りを取り込みました。` +
-        (createdWorkTypes ? `\n未登録だった小分類 ${createdWorkTypes} 件を追加しました。` : '') +
-        (errors.length ? `\n\n取り込めなかった行:\n${errors.slice(0, 20).join('\n')}` : ''));
-    } catch (e) {
-      showAlert('CSV を読み込めませんでした: ' + e.message);
-    }
+  $$('#cr-filters select, #cr-filters input').forEach((el) => el.addEventListener('change', renderCompanyRates));
+  $('#cr-export').addEventListener('click', () => {
+    const o = companyRateOptions();
+    const rows = Core.companyRates(state, o, perDay()).filter((r) => r.rate !== null);
+    exportCsv('自社の実績歩掛りの CSV', `自社実績歩掛り_${stamp()}.csv`, Core.companyRatesToCsv(state, rows, companyRateCondition(o)));
   });
 
   // ---------- 入出力 ----------
@@ -1568,6 +1451,7 @@
       if (wt) fillWorkTypeSelect(wt, cat.value, 'すべて');
     }
     fillSelect($('.wt-add [name=categoryId]'), state.categories, { placeholder: '大分類を選択' });
+    fillSelect($('#cr-kind'), state.siteKinds, { placeholder: 'すべて' });
   }
 
   function render() {
@@ -1582,7 +1466,7 @@
     else if (tab === 'list') renderList();
     else if (tab === 'cumul') renderCumul();
     else if (tab === 'summary') renderSummary();
-    else if (tab === 'rates') renderRateMasters();
+    else if (tab === 'rates') renderCompanyRates();
     else if (tab === 'master') renderMaster();
   }
 

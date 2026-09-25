@@ -33,8 +33,8 @@
     <section id="tab-entry" class="panel" role="tabpanel">
       <div class="welcome" id="welcome" hidden>
         <h2>はじめに</h2>
-        <p>サンプルデータ（現場 3 件〔うち完工 1 件〕・社員 3 名・歩掛りマスタ 2 件・記録）を入れると、
-          日報の入力や累計・集計をすぐに試せます。画面右上で「現場用」「管理者用」を切り替えられます（モック用の切り替えです）。
+        <p>サンプルデータ（現場 4 件〔うち完工 2 件〕・社員 3 名・記録）を入れると、
+          日報の入力や累計・集計・自社の実績歩掛りをすぐに試せます。画面右上で「現場用」「管理者用」を切り替えられます（モック用の切り替えです）。
           サンプルは「管理者用 → 設定 → 全データを削除」でいつでも消せます。</p>
         <div class="actions wrap">
           <button type="button" class="primary" id="load-sample">サンプルデータで試す</button>
@@ -144,10 +144,9 @@
         <h2>歩掛り（実績）</h2>
         <label class="check"><input type="checkbox" id="rate-by-site"> 現場ごとに分ける</label>
       </div>
-      <div class="compare-pick" id="compare-pick"></div>
       <div class="table-scroll" id="summary-rates"></div>
       <p class="muted small">歩掛り = 期間内の人工合計 ÷ 数量合計。数量を入れていない日の工数も分子に含みます。
-        比較欄の % は 実績 ÷ マスタ（100% 超は赤 = マスタより手間がかかっている）。マスタは「歩掛り」タブで登録します。</p>
+        複数現場をまとめた自社の実績歩掛りは「歩掛り」タブで確認できます。</p>
       <h2>大分類別</h2>
       <div id="summary-by-category"></div>
       <h2>小分類別</h2>
@@ -158,29 +157,37 @@
       <div class="table-scroll" id="summary-pivot"></div>
     </section>
 
-    <!-- 歩掛りマスタ -->
+    <!-- 自社の実績歩掛り -->
     <section id="tab-rates" class="panel" role="tabpanel" hidden>
-      <p class="muted small">国交省の標準歩掛りや元請ごとの歩掛りをマスタとして登録し、集計画面で実績と比較できます。
-        歩掛りは 1単位あたりの人工（人工/単位）で入力します。元請のマスタは「設定」の現場にも紐づけられます。</p>
-      <h2>歩掛りマスタ</h2>
-      <form class="add-form" id="rm-add">
-        <input type="text" name="name" placeholder="マスタ名（例: 国交省 R7年度 / ○○建設）" required>
-        <button type="submit">追加</button>
-      </form>
-      <ul class="master-list" id="rm-list"></ul>
-
-      <div id="rm-editor" hidden>
-        <h2 id="rm-title"></h2>
+      <p class="muted small">現場の日報から、工種ごとの自社の実績歩掛り（人工/単位）をまとめます。
+        積算で使う自社の歩掛りマスタを作るときの基礎データです。</p>
+      <div class="filters" id="cr-filters">
         <div class="field">
-          <label for="rm-note">メモ <span class="optional">適用年度・出典・元請名・条件など</span></label>
-          <input id="rm-note" type="text">
+          <label for="cr-target">対象の現場</label>
+          <select id="cr-target">
+            <option value="done">完工した現場のみ</option>
+            <option value="all">稼働中の現場も含める</option>
+          </select>
         </div>
-        <div class="actions wrap">
-          <button type="button" id="rm-export">CSV 出力（Excel 入力用のひな形）</button>
-          <label class="button">CSV を取り込む<input type="file" id="rm-import" accept=".csv,text/csv" hidden></label>
+        <div class="field"><label for="cr-kind">工事区分</label><select id="cr-kind"></select></div>
+        <div class="field">
+          <label for="cr-diff">難度</label>
+          <select id="cr-diff">
+            <option value="all">すべて</option>
+            <option value="normal">標準のみ（難を除く）</option>
+            <option value="hard">難のみ</option>
+          </select>
         </div>
-        <label class="check rm-only"><input type="checkbox" id="rm-only-set"> 登録済みの小分類だけ表示</label>
-        <div id="rm-rates"></div>
+        <div class="field"><label for="cr-from">記録日（から）</label><input id="cr-from" type="date"></div>
+        <div class="field"><label for="cr-to">記録日（まで）</label><input id="cr-to" type="date"></div>
+      </div>
+      <p class="cumul-status" id="cr-summary"></p>
+      <div class="table-scroll" id="cr-table"></div>
+      <p class="muted small">実績歩掛り = 人工合計 ÷ 数量合計（規模の大きい現場ほど重みが大きい平均）。
+        その工種の数量を一度も入れていない現場は計算から除き、「数量なし」に件数を出しています。
+        現場数が 2 以下の工種は <span class="pill few">参考</span> を付けています。</p>
+      <div class="actions">
+        <button type="button" id="cr-export">CSV 出力（積算の歩掛りマスタ用）</button>
       </div>
     </section>
 
@@ -188,13 +195,20 @@
     <section id="tab-master" class="panel" role="tabpanel" hidden>
       <h2>現場</h2>
       <p class="muted small">作番・現場名は kintone の現場アプリから取得します（モックでは下の欄で追加）。
-        状態・完工日・元請の歩掛りマスタはこのアプリで設定します。完工にした現場は入力できなくなり、累計は完工日時点で確定します。</p>
+        工事区分・状態・完工日はこのアプリで設定します。完工にした現場は入力できなくなり、累計は完工日時点で確定します。</p>
       <form class="add-form" data-master="sites">
         <input type="text" name="code" placeholder="作番" class="code-input" required aria-label="作番">
         <input type="text" name="name" placeholder="現場名" required aria-label="現場名">
         <button type="submit">追加</button>
       </form>
       <ul class="master-list" id="master-sites"></ul>
+
+      <h2>工事区分</h2>
+      <form class="add-form" data-master="siteKinds">
+        <input type="text" name="name" placeholder="工事区分を追加（例: 耐震改修）" required>
+        <button type="submit">追加</button>
+      </form>
+      <ul class="master-list" id="master-siteKinds"></ul>
 
       <h2>社員（入力者）</h2>
       <p class="muted small">管理番号・氏名は kintone の社員アプリから取得します（モックでは下の欄で追加）。</p>

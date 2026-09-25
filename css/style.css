@@ -247,7 +247,6 @@ thead th { font-size: 0.8rem; color: var(--muted); }
 .wt-extra label { display: flex; flex-direction: column; font-size: 0.7rem; color: var(--muted); gap: 2px; }
 .wt-extra input { min-height: 34px; padding: 4px 8px; font-size: 0.85rem; }
 .wt-extra .wt-unit { width: 5em; }
-.wt-extra .wt-std { width: 9em; }
 .master-list li.wt-row { align-items: flex-start; }
 
 .tag-cat { font-size: 0.75rem; color: var(--muted); margin-right: 4px; }
@@ -262,26 +261,13 @@ thead th { font-size: 0.8rem; color: var(--muted); }
 .wt-group > .master-list { margin-top: 0; border-top: 0; border-radius: 0 0 var(--radius) var(--radius); }
 .cat-cell { color: var(--muted); font-size: 0.8rem; }
 
-.compare-pick { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; align-items: center; }
-.compare-pick .label { font-size: 0.8rem; color: var(--muted); margin-right: 2px; }
 .chip { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); font-size: 0.85rem; cursor: pointer; }
 .chip input { width: auto; min-height: 0; }
 .chip:has(input:checked) { background: var(--accent-bg); border-color: var(--primary); color: var(--primary); }
-.std-cell div + div { font-size: 0.8rem; }
-.rates th.std-head { max-width: 8em; white-space: normal; }
-.master-list li.selected { background: var(--accent-bg); }
 .rm-meta { display: block; font-size: 0.75rem; color: var(--muted); }
-.rm-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.rm-row .rm-input { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
-.rm-row input { width: 7em; min-height: 36px; padding: 4px 8px; text-align: right; }
-.rm-row .unit { font-size: 0.8rem; color: var(--muted); min-width: 4.5em; }
-.rm-only { margin: 8px 0; }
-.site-extra { display: block; margin-top: 4px; }
-.site-extra select { min-height: 34px; padding: 4px 8px; font-size: 0.85rem; }
 
 .rates .wt-cell { white-space: normal; min-width: 8.5em; max-width: 10em; }
 .rates .wt-cell .site-name { font-size: 0.75rem; font-weight: 700; }
-.rates .std-head { min-width: 5.5em; }
 
 .modal {
   position: fixed; inset: 0; z-index: 100;
@@ -397,3 +383,16 @@ button.chip { min-height: 32px; }
 .segmented-mini { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 .segmented-mini button { min-height: 30px; padding: 2px 10px; border: 0; border-radius: 0; font-size: 0.8rem; }
 .segmented-mini button[aria-pressed="true"] { background: var(--primary); color: var(--primary-text); }
+
+/* ---------- 難度・工事区分・自社実績歩掛り ---------- */
+.hard-toggle {
+  display: inline-flex; align-items: center; gap: 4px; cursor: pointer;
+  padding: 2px 10px; min-height: 30px; border: 1px solid var(--border); border-radius: 999px;
+  font-size: 0.8rem; font-weight: 700; color: var(--muted); user-select: none;
+}
+.hard-toggle input { width: auto; min-height: 0; margin: 0; }
+.hard-toggle:has(input:checked) { background: var(--warn-bg); color: var(--warn-text); border-color: var(--warn-text); }
+.pill.hard { background: var(--warn-bg); color: var(--warn-text); }
+.pill.kind { background: var(--bg); color: var(--muted); border: 1px solid var(--border); }
+.pill.few { background: var(--bg); color: var(--muted); border: 1px dashed var(--muted); font-weight: 400; }
+.rates.company .wt-cell { white-space: normal; }
