@@ -1234,10 +1234,15 @@
     $('#sv-event-form').hidden = site.status === 'done';
 
     // これまでの日報
-    const reports = Core.reportsOfSite(state, site.id).filter((r) => r.date <= sheet.date);
-    $('#sv-reports').innerHTML = reports.length ? reports.slice(0, historyLimit).map((r) => reportHtml(r, names)).join('') : '<p class="muted">日報はまだありません</p>';
-    const first = $('#sv-reports details');
-    if (first) first.open = true;
+    const query = $('#sv-search').value.trim();
+    const reports = query ? Core.searchReports(state, site.id, query)
+      : Core.reportsOfSite(state, site.id).filter((r) => r.date <= sheet.date);
+    $('#sv-search-count').hidden = !query;
+    $('#sv-search-count').textContent = `「${query}」を含む日報: ${reports.length} 件`;
+    $('#sv-reports').innerHTML = reports.length ? reports.slice(0, historyLimit).map((r) => reportHtml(r, names)).join('')
+      : `<p class="muted">${query ? '見つかりませんでした' : '日報はまだありません'}</p>`;
+    // 検索中は見つかった日報を開いて表示、そうでなければ最新の 1 件だけ開く
+    $$('#sv-reports details').forEach((d, i) => { d.open = query ? i < 5 : i === 0; });
     $('#sv-more').hidden = reports.length <= historyLimit;
   }
 
@@ -1296,6 +1301,11 @@
     renderSiteView();
   });
   $('#sv-more').addEventListener('click', () => { historyLimit += 10; renderSiteView(); });
+  let searchTimer = null;
+  $('#sv-search').addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => { historyLimit = 5; renderSiteView(); }, 250);
+  });
 
   // ---------- 集計: 日報の提出状況 ----------
   function renderSubmission() {
@@ -1315,6 +1325,32 @@
       }).join('')}</tr>`).join('')}</tbody>
     </table>`;
   }
+
+  /** その日の全現場の日報を並べて読む（管理者用）。稼働中の現場は未提出も表示する */
+  function renderReadReports() {
+    const input = $('#read-date');
+    if (!input.value) input.value = toISODate(new Date());
+    const date = input.value;
+    const names = Core.nameLookup(state);
+    const reports = state.reports.filter((r) => r.date === date);
+    const sites = state.sites.filter((x) => x.status !== 'done' || reports.some((r) => r.siteId === x.id))
+      .sort((a, b) => String(a.code).localeCompare(String(b.code)));
+    $('#read-reports').innerHTML = sites.length ? sites.map((x) => {
+      const r = reports.find((y) => y.siteId === x.id);
+      return `<div class="read-site"><h3>${escapeHtml(Core.siteLabel(x))}</h3>
+        ${r ? reportHtml(r, names) : `<p class="muted small">未提出 <button type="button" class="chip" data-open-report="${escapeHtml(x.id)}|${date}">日報を開く</button></p>`}</div>`;
+    }).join('') : '<p class="muted">現場がありません</p>';
+    $$('#read-reports details').forEach((d) => { d.open = true; });
+  }
+
+  $('#read-date').addEventListener('change', renderReadReports);
+  $('#read-reports').addEventListener('click', async (ev) => {
+    const b = ev.target.closest('[data-open-report]');
+    if (!b || !await confirmDiscard()) return;
+    const [siteId, date] = b.dataset.openReport.split('|');
+    loadContext(date, siteId);
+    showTab('report');
+  });
 
   $('#summary-submission').addEventListener('click', async (ev) => {
     const b = ev.target.closest('[data-open-report]');
@@ -1401,6 +1437,14 @@
 
   let cumulSiteId = '';
 
+  /** 工数の入力率（工数の人工 ÷ 日報の出面）。低いと累計・歩掛が実際より小さく出る */
+  function coverageText(siteId, asOf) {
+    const c = Core.siteCoverage(state, siteId, { to: asOf }, perDay());
+    if (c === null) return '';
+    const p = Math.round(c * 100);
+    return `<span class="pill ${p < 70 ? 'hard' : 'kind'}" title="工数の人工 ÷ 日報の出面">工数の入力率 ${p}%</span>`;
+  }
+
   function renderCumul() {
     const sel = $('#c-site');
     if (!sel.value) sel.value = sheet.siteId || defaultSiteId() || (state.sites[0] || {}).id || '';
@@ -1425,7 +1469,8 @@
     const final = done && asOf === site.completedOn;
     $('#c-status').innerHTML = `${done ? `<span class="pill done">完工 ${escapeHtml(formatDateLong(site.completedOn))}</span>` : '<span class="pill active">稼働中</span>'}
       ${final ? '<strong>完工時の累計（確定）</strong>' : `<strong>${escapeHtml(formatDateLong(asOf))} 時点の累計</strong>`}
-      <span class="muted">（初回記録 ${escapeHtml(formatDateLong(range.first))}〜）</span>`;
+      <span class="muted">（初回記録 ${escapeHtml(formatDateLong(range.first))}〜）</span>
+      ${coverageText(site.id, asOf)}`;
     if (!entries.length) {
       $('#c-totals').innerHTML = '';
       $('#c-table').innerHTML = '<p class="muted">この時点までの記録はありません</p>';
@@ -1562,6 +1607,7 @@
       <div class="stat"><span>記録件数</span><strong>${entries.length}<small> 件</small></strong></div>`;
 
     renderSubmission();
+    renderReadReports();
     renderMonthly(entries);
     renderRates(entries);
     renderDetails();
@@ -1955,6 +2001,7 @@
       doneOnly: $('#cr-target').value !== 'all',
       kindId: $('#cr-kind').value,
       difficulty: $('#cr-diff').value,
+      minCoverage: Number($('#cr-coverage').value) || 0,
       from: $('#cr-from').value,
       to: $('#cr-to').value,
     };
@@ -1967,6 +2014,7 @@
       o.doneOnly ? '完工した現場のみ' : '稼働中の現場を含む',
       `工事区分: ${kind ? kind.name : 'すべて'}`,
       `難度: ${{ all: 'すべて', normal: '標準のみ', hard: '難のみ' }[o.difficulty]}`,
+      o.minCoverage ? `工数の入力率 ${Math.round(o.minCoverage * 100)}% 以上` : '',
       (o.from || o.to) ? `記録日: ${o.from ? formatDateLong(o.from) : '最初'}〜${o.to ? formatDateLong(o.to) : '最新'}` : '',
     ].filter(Boolean).join(' / ');
   }
@@ -1975,13 +2023,12 @@
     const o = companyRateOptions();
     const rows = Core.companyRates(state, o, perDay());
     const names = Core.nameLookup(state);
-    const siteMap = new Map(state.sites.map((x) => [x.id, x]));
-    const targetSites = new Set(state.entries.filter((e) => {
-      const site = siteMap.get(e.siteId);
-      return site && (!o.doneOnly || site.status === 'done') && (!o.kindId || site.kindId === o.kindId);
-    }).map((e) => e.siteId));
+    const targets = Core.rateTargetSites(state, o, perDay());
+    const siteName = (id) => { const x = state.sites.find((y) => y.id === id); return x ? Core.siteLabel(x) : '(削除済み)'; };
+    const pct = (c) => (c === null ? '不明' : `${Math.round(c * 100)}%`);
     $('#cr-summary').innerHTML = `<strong>${escapeHtml(companyRateCondition(o))}</strong>
-      <span class="muted">対象 ${targetSites.size} 現場・${rows.filter((r) => r.rate !== null).length} 工種</span>`;
+      <span class="muted">対象 ${targets.included.length} 現場・${rows.filter((r) => r.rate !== null).length} 工種</span>
+      ${targets.excluded.length ? `<span class="muted small">入力率が低いため除外: ${targets.excluded.map((x) => `${escapeHtml(siteName(x.siteId))}（${pct(x.coverage)}）`).join('、')}</span>` : ''}`;
     if (!rows.length) {
       $('#cr-table').innerHTML = `<p class="muted">${o.doneOnly ? '完工した現場の記録がありません。「対象の現場」を「稼働中の現場も含める」にすると途中の値を確認できます。' : '記録がありません'}</p>`;
       return;

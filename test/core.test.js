@@ -775,3 +775,61 @@ test('decodeText: UTF-8 と Shift_JIS（日本語版 Excel の CSV）を読み�
   const sjis = new Uint8Array([0x91, 0xE5, 0x95, 0xAA, 0x97, 0xDE]);
   assert.equal(Core.decodeText(sjis), '大分類');
 });
+
+test('工数の入力率: 工数の人工 ÷ 日報の出面（日報のある日だけ）。日報がなければ null', () => {
+  const s = reportState();
+  s.entries = [
+    { id: 'a', siteId: 's1', date: '2026-09-01', workTypeId: 'w1', people: 2, hours: 8 }, // 2 人工
+    { id: 'b', siteId: 's1', date: '2026-09-02', workTypeId: 'w1', people: 1, hours: 4 }, // 0.5 人工
+    { id: 'c', siteId: 's1', date: '2026-09-03', workTypeId: 'w1', people: 9, hours: 8 }, // 日報なし → 数えない
+  ];
+  s.reports = [
+    Core.normalizeReport({ date: '2026-09-01', siteId: 's1', crew: { own: 2, subs: [] } }),
+    Core.normalizeReport({ date: '2026-09-02', siteId: 's1', crew: { own: 1, subs: [{ name: 'x', people: 2 }] } }),
+  ];
+  assert.equal(Core.siteCoverage(s, 's1'), 0.5);                          // 2.5 / 5
+  assert.equal(Core.siteCoverage(s, 's1', { to: '2026-09-01' }), 1);     // 2 / 2
+  assert.equal(Core.siteCoverage(s, 's2'), null);
+  // 出面より工数が多くても 1 まで
+  s.entries.push({ id: 'd', siteId: 's1', date: '2026-09-01', workTypeId: 'w1', people: 5, hours: 8 });
+  assert.equal(Core.siteCoverage(s, 's1', { to: '2026-09-01' }), 1);
+});
+
+test('実績歩掛: 工数の入力率が低い現場を除ける（入力率が分からない現場は含める）', () => {
+  const s = rateState(); // A: 0.02, B: 0.08, C: 数量なし, D: 稼働中
+  s.reports = [
+    Core.normalizeReport({ date: '2026-06-01', siteId: 'A', crew: { own: 2, subs: [] } }),  // A: 工数 2 / 出面 2 = 100%
+    Core.normalizeReport({ date: '2026-07-01', siteId: 'B', crew: { own: 10, subs: [] } }), // B: 工数 2 / 出面 10 = 20%
+    Core.normalizeReport({ date: '2026-07-02', siteId: 'B', crew: { own: 10, subs: [] } }), //    ＋ 2 / 10 → 4 / 20 = 20%
+  ];
+  assert.equal(Core.companyRates(s)[0].rate, 0.04);                     // 指定なし: A + B
+  const t = Core.rateTargetSites(s, { minCoverage: 0.8 });
+  assert.deepEqual(t.included.map((x) => x.siteId).sort(), ['A', 'C']);  // C は日報がない → 含める
+  assert.deepEqual(t.excluded, [{ siteId: 'B', coverage: 0.2 }]);
+  const r = Core.companyRates(s, { minCoverage: 0.8 })[0];
+  assert.equal(r.rate, 0.02);                                            // A だけ
+  assert.equal(r.sites, 1);
+});
+
+test('日報の検索: 作業・予定・特記事項から探す。全角半角・大小文字を区別しない。ふりかえりは対象外', () => {
+  const s = reportState();
+  s.reports = [
+    Core.normalizeReport({ date: '2026-09-01', siteId: 's1', tasks: [{ place: '3F', work: '分電盤 据付', status: 'done' }] }),
+    Core.normalizeReport({ date: '2026-09-02', siteId: 's1', tasks: [{ place: '２F', work: 'LAN配線', memo: 'ＥＰＳ内', status: 'partial' }] }),
+    Core.normalizeReport({ date: '2026-09-03', siteId: 's1', notes: '元請と分電盤の位置を打合せ', reflection: '配管の段取り' }),
+    Core.normalizeReport({ date: '2026-09-04', siteId: 's2', tasks: [{ work: '分電盤 据付', status: 'done' }] }),
+  ];
+  assert.deepEqual(Core.searchReports(s, 's1', '分電盤').map((r) => r.date), ['2026-09-03', '2026-09-01']);
+  assert.deepEqual(Core.searchReports(s, 's1', '2f eps').map((r) => r.date), ['2026-09-02']); // 全角・半角・大小文字
+  assert.deepEqual(Core.searchReports(s, 's1', '分電盤 3F').map((r) => r.date), ['2026-09-01']); // すべての語を含む
+  assert.deepEqual(Core.searchReports(s, 's1', '段取り'), []);                                  // ふりかえりは対象外
+  assert.equal(Core.searchReports(s, 's1', '  ').length, 3);
+});
+
+test('サンプル: 工数の入力率（D 現場だけ低い）', () => {
+  const s = Core.emptyState();
+  const { sites } = Core.addSampleData(s, '2026-09-25');
+  const cov = sites.map((x) => Core.siteCoverage(s, x.id));
+  assert.ok(cov[0] >= 0.85 && cov[1] >= 0.85 && cov[2] >= 0.85, cov.join());
+  assert.ok(cov[3] < 0.7, cov.join());
+});

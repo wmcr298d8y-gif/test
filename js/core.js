@@ -565,6 +565,29 @@
     return { errors: [], report: clean };
   }
 
+  /** 検索用に表記をそろえる（全角・半角、大文字・小文字の違いを無視） */
+  function normalizeForSearch(s) {
+    return String(s || '').normalize('NFKC').toLowerCase();
+  }
+
+  /**
+   * 現場の日報をキーワードで探す（新しい順）。空白区切りの語をすべて含む日報を返す。
+   * 対象: 今日の作業（場所・作業・備考）、明日の予定、特記事項。ふりかえりは対象にしない（本人と管理者のみの情報のため）。
+   */
+  function searchReports(state, siteId, query) {
+    const terms = normalizeForSearch(query).split(/\s+/).filter(Boolean);
+    const reps = reportsOfSite(state, siteId);
+    if (!terms.length) return reps;
+    return reps.filter((r) => {
+      const text = normalizeForSearch([
+        ...r.tasks.flatMap((t) => [t.place, t.work, t.memo]),
+        ...r.tomorrow.flatMap((p) => [p.place, p.work]),
+        r.notes,
+      ].join(' '));
+      return terms.every((t) => text.includes(t));
+    });
+  }
+
   /** 指定日以降の予定（検査・打合せ・搬入など）。古い順 */
   function upcomingEvents(state, siteId, fromDate) {
     return state.events.filter((e) => e.siteId === siteId && e.date >= fromDate)
@@ -604,17 +627,49 @@
    *   kindId    工事区分で絞る
    *   difficulty 'all' | 'normal'（難なしのみ）| 'hard'（難ありのみ）
    *   from / to 記録日の範囲
+   *   minCoverage 工数の入力率（0〜1）がこれ未満の現場を除く
    * 戻り値（大分類・小分類の登録順）:
    *   [{ workTypeId, categoryId, unit, rate, output, quantity, manDays, sites, sitesNoQuantity, siteMin, siteMax, hardShare }]
    */
-  function companyRates(state, { doneOnly = true, kindId = '', difficulty = 'all', from = '', to = '' } = {}, hoursPerManDay) {
+  /**
+   * 現場の工数の入力率 = 工数の人工 ÷ 日報の出面の人工（日報がある日だけで比べる。最大 1）。
+   * 工数は任意入力なので、一部の日しか入れていない現場は歩掛が偏る。その判断に使う。
+   * 日報がない（出面が分からない）場合は null。
+   */
+  function siteCoverage(state, siteId, { from = '', to = '' } = {}, hoursPerManDay) {
     const perDay = Number(hoursPerManDay || state.settings.hoursPerManDay) || DEFAULT_SETTINGS.hoursPerManDay;
-    const siteMap = new Map(state.sites.map((x) => [x.id, x]));
+    const reps = state.reports.filter((r) => r.siteId === siteId && (!from || r.date >= from) && (!to || r.date <= to));
+    const crew = reps.reduce((sum, r) => sum + crewTotal(r), 0);
+    if (!crew) return null;
+    const dates = new Set(reps.map((r) => r.date));
+    const md = state.entries.filter((e) => e.siteId === siteId && dates.has(e.date))
+      .reduce((sum, e) => sum + entryManHours(e), 0) / perDay;
+    return Math.min(1, round2(md / crew));
+  }
+
+  /**
+   * 実績歩掛の対象にする現場。工数の入力率が minCoverage 未満の現場は除く（入力率が分からない現場は含める）。
+   * 戻り値: { included: [{ siteId, coverage }], excluded: [{ siteId, coverage }] }（記録のある現場のみ）
+   */
+  function rateTargetSites(state, { doneOnly = true, kindId = '', from = '', to = '', minCoverage = 0 } = {}, hoursPerManDay) {
+    const withEntries = new Set(state.entries.filter((e) => (!from || e.date >= from) && (!to || e.date <= to)).map((e) => e.siteId));
+    const included = [];
+    const excluded = [];
+    for (const site of state.sites) {
+      if (!withEntries.has(site.id)) continue;
+      if (doneOnly && site.status !== 'done') continue;
+      if (kindId && site.kindId !== kindId) continue;
+      const coverage = siteCoverage(state, site.id, { from, to }, hoursPerManDay);
+      (coverage !== null && coverage < minCoverage ? excluded : included).push({ siteId: site.id, coverage });
+    }
+    return { included, excluded };
+  }
+
+  function companyRates(state, { doneOnly = true, kindId = '', difficulty = 'all', from = '', to = '', minCoverage = 0 } = {}, hoursPerManDay) {
+    const perDay = Number(hoursPerManDay || state.settings.hoursPerManDay) || DEFAULT_SETTINGS.hoursPerManDay;
+    const targets = new Set(rateTargetSites(state, { doneOnly, kindId, from, to, minCoverage }, perDay).included.map((x) => x.siteId));
     const entries = state.entries.filter((e) => {
-      const site = siteMap.get(e.siteId);
-      if (!site) return false;
-      if (doneOnly && site.status !== 'done') return false;
-      if (kindId && site.kindId !== kindId) return false;
+      if (!targets.has(e.siteId)) return false;
       if (difficulty === 'normal' && e.hard) return false;
       if (difficulty === 'hard' && !e.hard) return false;
       return (!from || e.date >= from) && (!to || e.date <= to);
@@ -1034,10 +1089,11 @@
       [sites[0], weekdaysBack(todayIso, 10), employees[0], 0.1], // 改修はやや手間がかかる想定
       [sites[1], weekdaysBack(todayIso, 10), employees[1], 0],
       [sites[2], doneC, employees[2], 0.05],
-      [sites[3], doneD, employees[1], -0.05],
+      // D 現場は工数を一日おきにしか入れていない想定（工数の入力率が低い例）
+      [sites[3], doneD, employees[1], -0.05, true],
     ];
     const places = ['1F 東側', '1F 西側', '2F 東側', '2F 西側', '3F', '屋上', 'EPS'];
-    for (const [site, days, emp, bias] of plan) {
+    for (const [site, days, emp, bias, partialInput] of plan) {
       const dayItems = [];
       days.forEach((date, i) => {
         const phase = phases[Math.min(phases.length - 1, Math.floor((i / days.length) * phases.length))];
@@ -1052,19 +1108,21 @@
           const factor = (0.85 + rand() * 0.45 + bias) * (hard ? 1.4 : 1);
           const raw = manDays / (baseRates.get(name) * factor);
           const quantity = raw >= 20 ? Math.round(raw / 5) * 5 : Math.max(1, Math.round(raw));
-          state.entries.push({
+          const entry = {
             id: newId(), date, siteId: site.id, workTypeId: wt(name).id, people, hours,
             // 一部の日は数量を翌日にまとめて入力した想定で空欄にする
             quantity: rand() < 0.12 ? '' : quantity,
             hard, note: hard ? '高所作業' : '', inputBy: emp.id, order, createdAt: Date.now() + n++,
-          });
-          items.push({ place: pick(places), work: name, workTypeId: wt(name).id, people });
+          };
+          if (!(partialInput && i % 2 === 1)) state.entries.push(entry);
+          items.push({ place: pick(places), work: name, workTypeId: wt(name).id, people, manDays });
         });
       });
       // 日報: 今日の作業は工数と同じ内容、明日の予定は翌営業日の作業
       dayItems.forEach(({ date, items }, i) => {
         const next = dayItems[i + 1];
-        const total = items.reduce((sum, x) => sum + x.people, 0);
+        // 出面は作業時間から出した人工を 0.5 刻みで切り上げたもの（準備・片付けの分だけ工数より多くなる）
+        const total = Math.ceil(items.reduce((sum, x) => sum + x.manDays, 0) * 2) / 2;
         const subs = total >= 3 && rand() < 0.4 ? [{ name: '△△電設', people: 1 }] : [];
         const tasks = items.map((x) => normalizeTask({
           place: x.place, work: x.work, workTypeId: x.workTypeId,
@@ -1122,7 +1180,7 @@
     draftReport, syncCarryOver, validateReport, saveReport, crewTotal, upcomingEvents, reportSubmission, subcontractorNames,
     monthlyMatrix, siteDateRange, siteLabel, normalizeSite,
     DEFAULT_TAXONOMY, DEFAULT_SITE_KINDS, UNCATEGORIZED, emptyState,
-    companyRates, companyRatesToCsv, workTypesToCsv, importWorkTypesCsv, parseTable, decodeText, mergeDefaultTaxonomy, defaultUnit,
+    companyRates, companyRatesToCsv, siteCoverage, rateTargetSites, searchReports, workTypesToCsv, importWorkTypesCsv, parseTable, decodeText, mergeDefaultTaxonomy, defaultUnit,
     findOrAddCategory, findOrAddWorkType, workTypesOfCategory,
     newId, round2, parseTime, hoursFromRange, isBlank, entryQuantity, entryManHours, validateEntry,
     filterEntries, aggregate, pivotByDate, productivity,

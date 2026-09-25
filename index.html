@@ -180,6 +180,8 @@
 
       <section class="sv-block">
         <h2>これまでの日報</h2>
+        <input type="search" id="sv-search" placeholder="キーワードで探す（例: 分電盤、3F、検査）" aria-label="これまでの日報を探す">
+        <p class="muted small" id="sv-search-count" hidden></p>
         <div class="report-history" id="sv-reports"></div>
         <button type="button" id="sv-more" hidden>さらに表示</button>
       </section>
@@ -225,6 +227,11 @@
       </div>
       <h2>日報の提出状況（直近 7 日）</h2>
       <div class="table-scroll" id="summary-submission"></div>
+      <div class="section-head">
+        <h2>日報を読む（全現場）</h2>
+        <input type="date" id="read-date" aria-label="読む日報の日付">
+      </div>
+      <div class="report-history" id="read-reports"></div>
       <div class="totals" id="summary-totals"></div>
       <div class="section-head">
         <h2>月別・工種別</h2>
@@ -278,6 +285,15 @@
             <option value="hard">難のみ</option>
           </select>
         </div>
+        <div class="field">
+          <label for="cr-coverage">工数の入力率</label>
+          <select id="cr-coverage">
+            <option value="0">指定なし</option>
+            <option value="0.5">50% 以上の現場</option>
+            <option value="0.7">70% 以上の現場</option>
+            <option value="0.9">90% 以上の現場</option>
+          </select>
+        </div>
         <div class="field"><label for="cr-from">記録日（から）</label><input id="cr-from" type="date"></div>
         <div class="field"><label for="cr-to">記録日（まで）</label><input id="cr-to" type="date"></div>
       </div>
@@ -285,6 +301,7 @@
       <div class="table-scroll" id="cr-table"></div>
       <p class="muted small">実績歩掛 = 人工合計 ÷ 数量合計（規模の大きい現場ほど重みが大きい平均）。
         その工種の数量を一度も入れていない現場は計算から除き、「数量なし」に件数を出しています。
+        工数の入力率 = 工数の人工 ÷ 日報の出面（日報のある日で比較）。一部の日しか工数を入れていない現場は歩掛が偏るので、絞り込みに使います。
         現場数が 2 以下の工種は <span class="pill few">参考</span> を付けています。</p>
       <div class="actions">
         <button type="button" id="cr-export">CSV 出力（積算の歩掛マスタ用）</button>

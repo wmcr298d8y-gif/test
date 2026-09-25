@@ -539,3 +539,9 @@ button.chip { min-height: 32px; }
 .rates .count-rule { font-weight: 400; margin-top: 2px; }
 
 .sub-head { font-size: 0.9rem; margin: 16px 0 4px; }
+
+/* ---------- 日報を読む・検索 ---------- */
+.read-site { display: flex; flex-direction: column; gap: 4px; }
+.read-site h3 { margin: 8px 0 0; font-size: 0.9rem; }
+#read-date { width: auto; min-height: 36px; padding: 4px 8px; }
+#sv-search { margin-bottom: 8px; }
