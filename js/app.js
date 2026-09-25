@@ -356,6 +356,8 @@
   function loadContext(date, siteId) {
     loadSheet(date, siteId);
     loadReport(sheet.date, sheet.siteId);
+    // 現場タブを開いているときは、選んだ日付・現場の内容に描き直す
+    if (currentTab() === 'site') renderSiteView();
   }
 
   /** 入力画面で選べる現場（現場用は稼働中のみ、管理者は完工済みも表示・閲覧できる） */
@@ -721,7 +723,7 @@
   // ---------- 日報（必須） ----------
   const reportForm = $('#report-form');
   let report = { data: Core.normalizeReport({}), saved: false, fromDate: null, dirty: false };
-  const TASK_STATUS_ORDER = ['done', 'partial'];
+  const TASK_STATUS_ORDER = ['done', 'partial', 'carried'];
 
   function loadReport(date, siteId) {
     const d = siteId ? Core.draftReport(state, date, siteId) : { report: Core.normalizeReport({ date, siteId }), saved: false, fromDate: null };
@@ -754,9 +756,11 @@
     }).join('');
   }
 
-  /** 作業の備考欄の案内文（途中のときは進み具合を書いてもらう） */
+  /** 作業の備考欄の案内文（途中は進み具合、繰越は理由を書いてもらう） */
   function memoPlaceholder(status) {
-    return status === 'partial' ? 'どこまで進んだか・備考（例: 盤 2 面のうち 1 面済み）' : '備考（任意。確認済み・注意点など）';
+    if (status === 'partial') return 'どこまで進んだか・備考（例: 盤 2 面のうち 1 面済み）';
+    if (status === 'carried') return '繰越の理由（任意。例: 資材未着、他業者待ち、雨天）';
+    return '備考（任意。確認済み・注意点など）';
   }
 
   function taskHtml(t, i) {
@@ -766,10 +770,9 @@
         <div class="task-status" role="group" aria-label="作業 ${i + 1} の状態">
           ${TASK_STATUS_ORDER.map((st) => `<button type="button" data-status="${st}" aria-pressed="${t.status === st}">${Core.TASK_STATUS[st]}</button>`).join('')}
         </div>
-        <button type="button" class="task-carry" data-carry-task aria-label="作業 ${i + 1} を明日の予定へ繰越">繰越</button>
         <button type="button" class="task-del danger" data-del-task aria-label="作業 ${i + 1} を削除">削除</button>
       </div>
-      ${t.status ? '' : '<p class="task-hint">完了・途中を選ぶか、今日やらなかったら「繰越」</p>'}
+      ${t.status ? '' : '<p class="task-hint">完了・途中・繰越を選んでください（今日やらなかったら「繰越」）</p>'}
       ${t.prevMemo ? `<p class="task-prev">前回: ${escapeHtml(t.prevMemo)}</p>` : ''}
       <div class="task-fields">
         <input id="${id('place')}" data-tf="place" type="text" value="${escapeHtml(t.place)}" placeholder="場所（例: 2F 西側）" aria-label="作業 ${i + 1} の場所">
@@ -785,7 +788,7 @@
     const id = (f) => `plan-${p.id}-${f}`;
     return `<div class="task plan" data-plan="${escapeHtml(p.id)}">
       <div class="task-head">
-        ${p.carried ? '<span class="pill hard">繰越</span>' : p.fromTaskId ? '<span class="pill active">繰越（途中）</span>' : `<span class="muted small">予定 ${i + 1}</span>`}
+        ${p.carried ? '<span class="pill st-carried">繰越</span>' : p.fromTaskId ? '<span class="pill st-partial">繰越（途中）</span>' : `<span class="muted small">予定 ${i + 1}</span>`}
         <button type="button" class="task-del danger" data-del-plan aria-label="予定 ${i + 1} を削除">削除</button>
       </div>
       <div class="task-fields">
@@ -822,7 +825,7 @@
     const rp = Core.findReport(state, d.date, d.siteId);
     $('#rp-origin').innerHTML = !d.siteId ? '<span class="muted">現場を選ぶと、その現場の日報を入力できます。</span>'
       : report.saved ? `<span class="pill active">保存済み</span> ${rp && rp.inputBy ? `入力 ${escapeHtml(Core.nameLookup(state).employee(rp.inputBy))}` : ''}${rp && rp.updatedAt ? `・最終更新 ${new Date(rp.updatedAt).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}` : ''}`
-        : report.fromDate ? `<span class="pill kind">下書き</span> ${formatDate(report.fromDate)} の日報の「明日の予定」と途中の作業から作りました。それぞれ完了・途中を選ぶか、やらなかった作業は「繰越」してください。`
+        : report.fromDate ? `<span class="pill kind">下書き</span> ${formatDate(report.fromDate)} の日報の「明日の予定」と途中・繰越の作業から作りました。それぞれ完了・途中・繰越を選んでください。`
           : '<span class="pill kind">新規</span> この現場の最初の日報です。';
     $('#rp-weather').innerHTML = Core.WEATHERS.map((w) =>
       `<button type="button" data-weather="${w}" aria-pressed="${d.weather === w}">${w}</button>`).join('');
@@ -840,7 +843,7 @@
     const tasks = d.tasks.filter((t) => t.place.trim() || t.work.trim());
     const count = (st) => tasks.filter((t) => t.status === st).length;
     $('#rp-status').innerHTML = `出面 <strong>${fmt(Core.crewTotal(d))} 人工</strong>・作業 ${tasks.length}` +
-      (tasks.length ? `<span class="muted small">（完了 ${count('done')}・途中 ${count('partial')}${count('') ? `・<span class="over">未選択 ${count('')}</span>` : ''}）</span>` : '') +
+      (tasks.length ? `<span class="muted small">（完了 ${count('done')}・途中 ${count('partial')}・繰越 ${count('carried')}${count('') ? `・<span class="over">未選択 ${count('')}</span>` : ''}）</span>` : '') +
       (report.dirty ? ' <span class="unsaved">未保存</span>' : '');
     $('#rp-save').disabled = !report.dirty || Core.isSiteDone(state, d.siteId) || !d.siteId;
     const crewTotal = $('#rp-crew .crew-total strong');
@@ -929,20 +932,9 @@
       if (hint) hint.remove();
       const memo = box.querySelector('[data-tf=memo]');
       memo.placeholder = memoPlaceholder(t.status);
-      if (t.status === 'partial' && !t.memo) memo.focus();
+      if (t.status !== 'done' && !t.memo) memo.focus();
       refreshPlans();
       markReportDirty();
-      return;
-    }
-    if (ev.target.closest('[data-carry-task]')) {
-      if (!(t.place.trim() || t.work.trim())) { toast('場所か作業を入力してから繰越してください'); return; }
-      Core.carryOverTask(report.data, t.id);
-      if (!report.data.tasks.length) report.data.tasks.push(newTask());
-      $('#rp-tasks').innerHTML = report.data.tasks.map(taskHtml).join('');
-      refreshPlans();
-      $('#rp-plans').innerHTML = report.data.tomorrow.map(planHtml).join('');
-      markReportDirty();
-      toast(`「${[t.place, t.work].filter(Boolean).join(' ')}」を明日の予定へ繰越しました`);
       return;
     }
     if (ev.target.closest('[data-del-task]')) {
