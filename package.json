@@ -1,0 +1,10 @@
+{
+  "name": "site-work-hours",
+  "version": "1.0.0",
+  "private": true,
+  "description": "現場での工種別工数を記録するアプリ",
+  "scripts": {
+    "start": "npx --yes http-server -p 8080 -c-1 .",
+    "test": "node --test"
+  }
+}

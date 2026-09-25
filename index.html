@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1f5f99">
+  <title>現場工数記録</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="app-header">
+    <h1>現場工数記録</h1>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-tab="entry" aria-selected="true">入力</button>
+    <button role="tab" data-tab="list">一覧</button>
+    <button role="tab" data-tab="summary">集計</button>
+    <button role="tab" data-tab="master">設定</button>
+  </nav>
+
+  <main>
+    <!-- 入力 -->
+    <section id="tab-entry" class="panel" role="tabpanel">
+      <form id="entry-form" novalidate>
+        <input type="hidden" name="id">
+        <div class="field">
+          <label for="f-date">日付</label>
+          <input id="f-date" type="date" name="date" required>
+        </div>
+        <div class="field">
+          <label for="f-site">現場</label>
+          <select id="f-site" name="siteId" required></select>
+        </div>
+        <div class="field">
+          <label for="f-worktype">工種</label>
+          <select id="f-worktype" name="workTypeId" required></select>
+        </div>
+        <div class="field">
+          <label for="f-worker">作業者・業者 <span class="optional">任意</span></label>
+          <input id="f-worker" type="text" name="worker" list="worker-list" autocomplete="off" placeholder="例: 山田 / ○○工業">
+          <datalist id="worker-list"></datalist>
+        </div>
+
+        <div class="field">
+          <span class="label">時間の入力方法</span>
+          <div class="segmented">
+            <label><input type="radio" name="mode" value="hours" checked> 時間で入力</label>
+            <label><input type="radio" name="mode" value="range"> 開始・終了で入力</label>
+          </div>
+        </div>
+
+        <div class="row" id="range-fields" hidden>
+          <div class="field">
+            <label for="f-start">開始</label>
+            <input id="f-start" type="time" name="start" value="08:00">
+          </div>
+          <div class="field">
+            <label for="f-end">終了</label>
+            <input id="f-end" type="time" name="end" value="17:00">
+          </div>
+          <div class="field">
+            <label for="f-break">休憩(分)</label>
+            <input id="f-break" type="number" name="breakMinutes" min="0" step="5" value="60" inputmode="numeric">
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="field">
+            <label for="f-hours">時間(h/人)</label>
+            <input id="f-hours" type="number" name="hours" min="0.25" max="24" step="0.25" value="8" inputmode="decimal" required>
+            <div class="quick" id="quick-hours">
+              <button type="button" data-h="1">1</button>
+              <button type="button" data-h="2">2</button>
+              <button type="button" data-h="4">4</button>
+              <button type="button" data-h="8">8</button>
+            </div>
+          </div>
+          <div class="field">
+            <label for="f-people">人数</label>
+            <input id="f-people" type="number" name="people" min="1" step="1" value="1" inputmode="numeric" required>
+            <div class="quick">
+              <button type="button" data-step="-1">−</button>
+              <button type="button" data-step="1">＋</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="f-note">備考 <span class="optional">任意</span></label>
+          <textarea id="f-note" name="note" rows="2" placeholder="作業内容・場所など"></textarea>
+        </div>
+
+        <p class="calc" id="calc-preview"></p>
+        <ul class="errors" id="form-errors"></ul>
+
+        <div class="actions">
+          <button type="submit" class="primary" id="submit-btn">記録する</button>
+          <button type="button" id="cancel-edit" hidden>編集をやめる</button>
+        </div>
+      </form>
+
+      <h2>この日の記録</h2>
+      <div id="today-list"></div>
+    </section>
+
+    <!-- 一覧 -->
+    <section id="tab-list" class="panel" role="tabpanel" hidden>
+      <div class="filters" id="list-filters">
+        <div class="field"><label>開始日</label><input type="date" name="from"></div>
+        <div class="field"><label>終了日</label><input type="date" name="to"></div>
+        <div class="field"><label>現場</label><select name="siteId"></select></div>
+        <div class="field"><label>工種</label><select name="workTypeId"></select></div>
+      </div>
+      <p class="muted" id="list-count"></p>
+      <div id="entry-list"></div>
+      <div class="actions">
+        <button type="button" id="export-list-csv">表示中の記録を CSV 出力</button>
+      </div>
+    </section>
+
+    <!-- 集計 -->
+    <section id="tab-summary" class="panel" role="tabpanel" hidden>
+      <div class="filters" id="summary-filters">
+        <div class="field"><label>開始日</label><input type="date" name="from"></div>
+        <div class="field"><label>終了日</label><input type="date" name="to"></div>
+        <div class="field"><label>現場</label><select name="siteId"></select></div>
+        <div class="field wide">
+          <label>期間</label>
+          <div class="quick" id="period-quick">
+            <button type="button" data-period="week">今週</button>
+            <button type="button" data-period="month">今月</button>
+            <button type="button" data-period="lastmonth">先月</button>
+            <button type="button" data-period="all">全期間</button>
+          </div>
+        </div>
+      </div>
+      <div class="totals" id="summary-totals"></div>
+      <h2>工種別</h2>
+      <div id="summary-by-worktype"></div>
+      <h2>現場別</h2>
+      <div id="summary-by-site"></div>
+      <h2>工種 × 日付（延べ工数 h）</h2>
+      <div class="table-scroll" id="summary-pivot"></div>
+    </section>
+
+    <!-- 設定 -->
+    <section id="tab-master" class="panel" role="tabpanel" hidden>
+      <h2>現場</h2>
+      <form class="add-form" data-master="sites">
+        <input type="text" name="name" placeholder="現場名を追加" required>
+        <button type="submit">追加</button>
+      </form>
+      <ul class="master-list" id="master-sites"></ul>
+
+      <h2>工種</h2>
+      <form class="add-form" data-master="workTypes">
+        <input type="text" name="name" placeholder="工種を追加" required>
+        <button type="submit">追加</button>
+      </form>
+      <ul class="master-list" id="master-workTypes"></ul>
+
+      <h2>作業者・業者（入力候補）</h2>
+      <form class="add-form" data-master="workers">
+        <input type="text" name="name" placeholder="名前を追加" required>
+        <button type="submit">追加</button>
+      </form>
+      <ul class="master-list" id="master-workers"></ul>
+
+      <h2>換算</h2>
+      <div class="field inline">
+        <label for="s-perday">1人工 =</label>
+        <input id="s-perday" type="number" min="1" max="24" step="0.5" inputmode="decimal">
+        <span>時間</span>
+      </div>
+
+      <h2>データ管理</h2>
+      <p class="muted">データはこの端末のブラウザ内に保存されます。機種変更やブラウザのデータ削除に備えて、定期的にバックアップしてください。</p>
+      <div class="actions wrap">
+        <button type="button" id="backup-json">バックアップ(JSON)を保存</button>
+        <label class="button">バックアップから復元<input type="file" id="restore-json" accept=".json,application/json" hidden></label>
+        <button type="button" id="export-all-csv">全記録を CSV 出力</button>
+        <label class="button">CSV を取り込む<input type="file" id="import-csv" accept=".csv,text/csv" hidden></label>
+        <button type="button" class="danger" id="clear-all">全データを削除</button>
+      </div>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="js/core.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
