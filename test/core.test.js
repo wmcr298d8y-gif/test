@@ -7,9 +7,9 @@ function sampleState() {
   s.sites = [{ id: 's1', name: 'A現場' }, { id: 's2', name: 'B現場' }];
   s.categories = [{ id: 'c1', name: '配管工事' }, { id: 'c2', name: '照明・配線器具' }];
   s.workTypes = [
-    { id: 'w1', categoryId: 'c1', name: '電線管敷設（露出）', unit: 'm', standardRate: '' },
-    { id: 'w2', categoryId: 'c2', name: '照明器具取付', unit: '台', standardRate: '' },
-    { id: 'w3', categoryId: 'c1', name: 'ボックス取付', unit: '個', standardRate: '' },
+    { id: 'w1', categoryId: 'c1', name: '電線管敷設（露出）', unit: 'm' },
+    { id: 'w2', categoryId: 'c2', name: '照明器具取付', unit: '台' },
+    { id: 'w3', categoryId: 'c1', name: 'ボックス取付', unit: '個' },
   ];
   s.entries = [
     { id: 'e1', date: '2026-09-01', siteId: 's1', workTypeId: 'w1', people: 3, hours: 8 },
@@ -98,8 +98,8 @@ test('nameLookup: 大分類 › 小分類', () => {
 
 test('productivity: 歩掛り = 人工合計 ÷ 数量合計（数量未入力日の工数も含む）', () => {
   const workTypes = [
-    { id: 'kan', categoryId: 'c1', name: '電線管敷設（露出）', unit: 'm', standardRate: 0.02 },
-    { id: 'lan', categoryId: 'c2', name: 'LAN配線', unit: 'm', standardRate: '' },
+    { id: 'kan', categoryId: 'c1', name: '電線管敷設（露出）', unit: 'm' },
+    { id: 'lan', categoryId: 'c2', name: 'LAN配線', unit: 'm' },
   ];
   const entries = [
     // 配管: 2人×8h=2人工 で 60m、翌日 2人×8h=2人工（数量なし）、翌々日 2人×8h=2人工 で 140m
@@ -114,7 +114,6 @@ test('productivity: 歩掛り = 人工合計 ÷ 数量合計（数量未入力�
   assert.equal(kan.quantity, 200);
   assert.equal(kan.rate, 0.03);       // 6人工 / 200m
   assert.equal(kan.output, 33.33);    // 200m / 6人工
-  assert.equal(kan.ratio, 150);       // 標準 0.02 の 1.5 倍
   assert.equal(kan.unit, 'm');
   assert.equal(kan.categoryId, 'c1');
   assert.equal(kan.days, 3);
@@ -122,7 +121,6 @@ test('productivity: 歩掛り = 人工合計 ÷ 数量合計（数量未入力�
 
   const lan = rows.find((r) => r.workTypeId === 'lan');
   assert.equal(lan.rate, null);
-  assert.equal(lan.ratio, null);
 
   const bySite = Core.productivity(entries, workTypes, 8, { bySite: true });
   assert.equal(bySite.find((r) => r.siteId === 'A' && r.workTypeId === 'kan').rate, 0.067); // 4人工 / 60m
@@ -188,4 +186,94 @@ test('normalizeState: 壊れたデータでも既定値で補完', () => {
   assert.equal(s.categories.length, Core.DEFAULT_TAXONOMY.length);
   const t = Core.normalizeState({ entries: [] });
   assert.equal(t.categories.length, Core.DEFAULT_TAXONOMY.length);
+});
+
+test('compareStandards: 複数マスタ・各現場の元請マスタと比較', () => {
+  const s = sampleState();
+  s.entries = [
+    { date: '2026-09-01', siteId: 's1', workTypeId: 'w1', people: 2, hours: 8, quantity: 100 }, // 0.02 人工/m
+    { date: '2026-09-01', siteId: 's2', workTypeId: 'w1', people: 3, hours: 8, quantity: 100 }, // 0.03 人工/m
+  ];
+  const mlit = Core.addRateMaster(s, '国交省');
+  const genA = Core.addRateMaster(s, '元請A');
+  Core.setRate(mlit, 'w1', 0.025);
+  Core.setRate(genA, 'w1', 0.02);
+  s.sites[0].rateMasterId = genA.id; // s2 は未設定
+
+  const all = Core.compareStandards(Core.productivity(s.entries, s.workTypes, 8), s, [mlit.id, Core.SITE_MASTER]);
+  assert.equal(all[0].rate, 0.025);
+  assert.deepEqual(all[0].standards[mlit.id], { masterId: mlit.id, rate: 0.025, ratio: 100 });
+  // 現場ごとでない集計では現場マスタは比較できない
+  assert.equal(all[0].standards[Core.SITE_MASTER].rate, null);
+
+  const bySite = Core.compareStandards(Core.productivity(s.entries, s.workTypes, 8, { bySite: true }), s, [mlit.id, Core.SITE_MASTER]);
+  const a = bySite.find((r) => r.siteId === 's1');
+  const b = bySite.find((r) => r.siteId === 's2');
+  assert.equal(a.standards[mlit.id].ratio, 80);
+  assert.deepEqual(a.standards[Core.SITE_MASTER], { masterId: genA.id, rate: 0.02, ratio: 100 });
+  assert.equal(b.standards[mlit.id].ratio, 120);
+  assert.equal(b.standards[Core.SITE_MASTER].rate, null);
+});
+
+test('setRate / addRateMaster（複製）', () => {
+  const s = sampleState();
+  const m = Core.addRateMaster(s, '国交省');
+  assert.equal(Core.setRate(m, 'w1', '0.04'), true);
+  assert.equal(Core.rateOf(m, 'w1'), 0.04);
+  assert.equal(Core.setRate(m, 'w1', '-1'), false);
+  assert.equal(Core.setRate(m, 'w1', 'abc'), false);
+  assert.equal(Core.rateOf(m, 'w1'), 0.04);
+  const copy = Core.addRateMaster(s, 'コピー', { copyFromId: m.id });
+  Core.setRate(copy, 'w1', 0.05);
+  assert.equal(Core.rateOf(m, 'w1'), 0.04); // 元は変わらない
+  Core.setRate(m, 'w1', '');
+  assert.equal(Core.rateOf(m, 'w1'), null);
+});
+
+test('歩掛りマスタ CSV: ひな形出力 → 記入 → 取り込み（未登録の小分類は追加）', () => {
+  const s = sampleState();
+  const m = Core.addRateMaster(s, '国交省');
+  Core.setRate(m, 'w2', 0.15);
+  const csv = Core.rateMasterToCsv(s, m);
+  const lines = csv.replace(/^﻿/, '').trim().split('\r\n');
+  assert.equal(lines[0], '大分類,小分類,単位,歩掛り(人工/単位)');
+  assert.equal(lines.length, 1 + s.workTypes.length); // 未登録も空欄で出る
+  assert.ok(lines.includes('照明・配線器具,照明器具取付,台,0.15'));
+
+  const dst = Core.addRateMaster(s, '取込先');
+  const filled = '﻿' + [
+    '大分類,小分類,単位,歩掛り(人工/単位)',
+    '配管工事,電線管敷設（露出）,m,0.035',
+    '配管工事,ボックス取付,個,',            // 空欄は読み飛ばし
+    '配管工事,"電線管敷設（露出）PF16",m,0.03', // 未登録 → 追加
+    '配管工事,ケーブルラック敷設,m,abc',       // 不正値
+  ].join('\r\n');
+  const before = s.workTypes.length;
+  const res = Core.importRateMasterCsv(s, dst, filled);
+  assert.equal(res.updated, 2);
+  assert.equal(res.createdWorkTypes, 1);
+  assert.equal(res.errors.length, 1);
+  assert.match(res.errors[0], /^5行目/);
+  assert.equal(s.workTypes.length, before + 1);
+  assert.equal(Core.rateOf(dst, 'w1'), 0.035);
+  const added = s.workTypes.find((w) => w.name === '電線管敷設（露出）PF16');
+  assert.equal(added.categoryId, 'c1');
+  assert.equal(added.unit, 'm');
+  assert.equal(Core.rateOf(dst, added.id), 0.03);
+});
+
+test('normalizeState: 旧形式の小分類の標準歩掛りをマスタへ移行', () => {
+  const s = Core.normalizeState({
+    categories: [{ id: 'c1', name: '配管工事' }],
+    workTypes: [
+      { id: 'a', categoryId: 'c1', name: '電線管敷設（露出）', unit: 'm', standardRate: 0.02 },
+      { id: 'b', categoryId: 'c1', name: 'ボックス取付', unit: '個', standardRate: '' },
+    ],
+  });
+  assert.equal(s.rateMasters.length, 1);
+  assert.deepEqual(s.rateMasters[0].rates, { a: 0.02 });
+  assert.deepEqual(s.settings.compareMasterIds, [s.rateMasters[0].id]);
+  assert.ok(s.workTypes.every((w) => !('standardRate' in w)));
+  // 設定の配列が既定値と共有されていない
+  assert.notEqual(Core.emptyState().settings.compareMasterIds, Core.emptyState().settings.compareMasterIds);
 });

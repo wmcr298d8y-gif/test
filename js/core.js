@@ -34,7 +34,9 @@
 
   const UNCATEGORIZED = '未分類';
 
-  const DEFAULT_SETTINGS = { hoursPerManDay: 8 };
+  // compareMasterIds: 集計画面で実績と並べて表示する歩掛りマスタ（SITE_MASTER は各現場に設定したマスタ）
+  const DEFAULT_SETTINGS = { hoursPerManDay: 8, compareMasterIds: [] };
+  const SITE_MASTER = '@site';
 
   /** 小分類名 → 既定の単位 */
   function defaultUnit(name) {
@@ -51,9 +53,10 @@
       sites: [],
       categories: [],
       workTypes: [],
+      rateMasters: [],
       workers: [],
       entries: [],
-      settings: { ...DEFAULT_SETTINGS },
+      settings: { ...DEFAULT_SETTINGS, compareMasterIds: [] },
     };
     mergeDefaultTaxonomy(state);
     return state;
@@ -66,7 +69,7 @@
       const catId = findOrAddCategory(state, catName);
       for (const [name, unit] of items) {
         if (!state.workTypes.some((w) => w.categoryId === catId && w.name === name)) {
-          state.workTypes.push({ id: newId(), categoryId: catId, name, unit, standardRate: '' });
+          state.workTypes.push({ id: newId(), categoryId: catId, name, unit });
           added++;
         }
       }
@@ -83,7 +86,7 @@
   function findOrAddWorkType(state, categoryId, name, unit) {
     let w = state.workTypes.find((x) => x.categoryId === categoryId && x.name === name);
     if (!w) {
-      w = { id: newId(), categoryId, name, unit: unit || defaultUnit(name), standardRate: '' };
+      w = { id: newId(), categoryId, name, unit: unit || defaultUnit(name) };
       state.workTypes.push(w);
     }
     return w.id;
@@ -209,6 +212,7 @@
    * 数量を記録していない日の工数も、その工種の施工に要した手間として分子に含める。
    * bySite: true で 現場×小分類 ごとに集計する。
    * categories を渡すと大分類・小分類の登録順に並べる（省略時は工数の降順）。
+   * 歩掛りマスタとの比較は compareStandards で付け加える。
    */
   function productivity(entries, workTypes, hoursPerManDay, { bySite = false, categories = null } = {}) {
     const perDay = Number(hoursPerManDay) || DEFAULT_SETTINGS.hoursPerManDay;
@@ -231,7 +235,6 @@
       const manDays = manHours / perDay;
       const quantity = round2(g.quantity);
       const wt = wtMap.get(g.workTypeId);
-      const std = wt && !isBlank(wt.standardRate) ? Number(wt.standardRate) : null;
       const rate = quantity > 0 ? manDays / quantity : null;
       return {
         key: g.key, workTypeId: g.workTypeId, siteId: g.siteId,
@@ -241,8 +244,6 @@
         rate: rate === null ? null : Math.round(rate * 1000) / 1000,
         output: manDays > 0 && quantity > 0 ? round2(quantity / manDays) : null,
         days: g.dates.size, quantityDays: g.quantityDates.size,
-        standardRate: std,
-        ratio: rate !== null && std ? round2((rate / std) * 100) : null,
       };
     });
     if (categories) {
@@ -255,6 +256,102 @@
         b.manHours - a.manHours);
     }
     return rows.sort((a, b) => b.manHours - a.manHours);
+  }
+
+  // ---------- 歩掛りマスタ ----------
+
+  /** マスタに登録された小分類の歩掛り（人工/単位）。未登録は null */
+  function rateOf(master, workTypeId) {
+    if (!master || !master.rates) return null;
+    const v = master.rates[workTypeId];
+    return isBlank(v) || !Number.isFinite(Number(v)) ? null : Number(v);
+  }
+
+  /**
+   * productivity の各行に、指定した歩掛りマスタの値と対比（実績 ÷ マスタ × 100%）を付ける。
+   * masterIds に SITE_MASTER を含めると、行の現場に設定されたマスタと比較する（現場ごと集計時のみ有効）。
+   * 戻り値: 各行に standards: { [masterId]: { masterId, rate, ratio } } を追加したもの
+   */
+  function compareStandards(rows, state, masterIds) {
+    const masters = new Map(state.rateMasters.map((m) => [m.id, m]));
+    const siteMaster = new Map(state.sites.map((x) => [x.id, x.rateMasterId || '']));
+    return rows.map((r) => {
+      const standards = {};
+      for (const id of masterIds) {
+        const mId = id === SITE_MASTER ? (r.siteId ? siteMaster.get(r.siteId) || '' : '') : id;
+        const std = rateOf(masters.get(mId), r.workTypeId);
+        standards[id] = {
+          masterId: mId,
+          rate: std,
+          ratio: r.rate !== null && std ? round2((r.rate / std) * 100) : null,
+        };
+      }
+      return { ...r, standards };
+    });
+  }
+
+  function addRateMaster(state, name, { note = '', copyFromId = '' } = {}) {
+    const src = state.rateMasters.find((m) => m.id === copyFromId);
+    const master = { id: newId(), name, note, rates: src ? { ...src.rates } : {} };
+    state.rateMasters.push(master);
+    return master;
+  }
+
+  /** マスタの歩掛りを設定する。空欄・不正値は削除扱い */
+  function setRate(master, workTypeId, value) {
+    if (isBlank(value)) { delete master.rates[workTypeId]; return true; }
+    const n = Number(value);
+    if (!Number.isFinite(n) || n < 0) return false;
+    master.rates[workTypeId] = n;
+    return true;
+  }
+
+  const RATE_CSV_HEADER = ['大分類', '小分類', '単位', '歩掛り(人工/単位)'];
+
+  /** 歩掛りマスタを CSV 化する。未登録の小分類も空欄で出力し、Excel での入力用テンプレートとして使える */
+  function rateMasterToCsv(state, master) {
+    const lines = [RATE_CSV_HEADER.join(',')];
+    for (const c of state.categories) {
+      for (const w of workTypesOfCategory(state, c.id)) {
+        const r = rateOf(master, w.id);
+        lines.push([c.name, w.name, w.unit || '', r === null ? '' : r].map(csvEscape).join(','));
+      }
+    }
+    return '\uFEFF' + lines.join('\r\n') + '\r\n';
+  }
+
+  /**
+   * CSV を歩掛りマスタに取り込む。未登録の大分類・小分類は追加する。
+   * 歩掛りが空欄の行は読み飛ばす（既存の値は消さない）。
+   */
+  function importRateMasterCsv(state, master, text) {
+    const rows = parseCsv(text);
+    if (!rows.length) return { updated: 0, createdWorkTypes: 0, errors: ['データがありません'] };
+    const header = rows[0].map((h) => h.trim());
+    const col = (...names) => names.map((n) => header.indexOf(n)).find((i) => i >= 0) ?? -1;
+    const idx = {
+      category: col('大分類'), workType: col('小分類', '工種'), unit: col('単位'),
+      rate: col('歩掛り(人工/単位)', '歩掛り', '歩掛'),
+    };
+    if (idx.workType < 0 || idx.rate < 0) {
+      return { updated: 0, createdWorkTypes: 0, errors: ['見出し行に 小分類・歩掛り(人工/単位) が必要です'] };
+    }
+    const get = (r, i) => (i >= 0 ? (r[i] || '').trim() : '');
+    let updated = 0;
+    const before = state.workTypes.length;
+    const errors = [];
+    rows.slice(1).forEach((r, n) => {
+      const name = get(r, idx.workType);
+      const rate = get(r, idx.rate);
+      if (!name || rate === '') return;
+      const v = Number(rate);
+      if (!Number.isFinite(v) || v < 0) { errors.push(`${n + 2}行目: 歩掛り「${rate}」が数値ではありません`); return; }
+      const catId = findOrAddCategory(state, get(r, idx.category) || UNCATEGORIZED);
+      const wtId = findOrAddWorkType(state, catId, name, get(r, idx.unit));
+      master.rates[wtId] = v;
+      updated++;
+    });
+    return { updated, createdWorkTypes: state.workTypes.length - before, errors };
   }
 
   function csvEscape(v) {
@@ -280,7 +377,7 @@
       ].map(csvEscape).join(','));
     }
     // Excel で文字化けしないよう BOM 付き
-    return '﻿' + lines.join('\r\n') + '\r\n';
+    return '\uFEFF' + lines.join('\r\n') + '\r\n';
   }
 
   function parseCsv(text) {
@@ -288,7 +385,7 @@
     let row = [];
     let field = '';
     let inQuotes = false;
-    const s = text.replace(/^﻿/, '');
+    const s = text.replace(/^\uFEFF/, '');
     for (let i = 0; i < s.length; i++) {
       const c = s[i];
       if (inQuotes) {
@@ -387,25 +484,44 @@
       sites: Array.isArray(raw.sites) ? raw.sites : [],
       categories: Array.isArray(raw.categories) ? raw.categories : [],
       workTypes: [],
+      rateMasters: Array.isArray(raw.rateMasters)
+        ? raw.rateMasters.map((m) => ({ note: '', ...m, rates: { ...(m.rates || {}) } }))
+        : [],
       workers: Array.isArray(raw.workers) ? raw.workers : [],
       entries: Array.isArray(raw.entries) ? raw.entries : [],
-      settings: { ...DEFAULT_SETTINGS, ...(raw.settings || {}) },
+      settings: {
+        ...DEFAULT_SETTINGS, ...(raw.settings || {}),
+        compareMasterIds: [...((raw.settings && raw.settings.compareMasterIds) || [])],
+      },
     };
     if (!Array.isArray(raw.workTypes)) {
       mergeDefaultTaxonomy(state);
       return state;
     }
     const catIds = new Set(state.categories.map((c) => c.id));
+    // 旧バージョンでは標準歩掛りを小分類に直接持っていたため、マスタへ移す
+    const legacyRates = {};
     state.workTypes = raw.workTypes.map((w) => {
-      const wt = { unit: defaultUnit(w.name), standardRate: '', ...w };
+      const { standardRate, ...wt } = { unit: defaultUnit(w.name), ...w };
       if (!catIds.has(wt.categoryId)) wt.categoryId = findOrAddCategory(state, UNCATEGORIZED);
+      if (!isBlank(standardRate) && Number.isFinite(Number(standardRate))) legacyRates[wt.id] = Number(standardRate);
       return wt;
     });
+    if (Object.keys(legacyRates).length) {
+      const m = addRateMaster(state, '標準歩掛り（旧設定から移行）');
+      m.rates = legacyRates;
+      if (!state.settings.compareMasterIds.length) state.settings.compareMasterIds = [m.id];
+    }
+    // 削除済みマスタへの参照を外す
+    const masterIds = new Set(state.rateMasters.map((m) => m.id));
+    state.settings.compareMasterIds = (state.settings.compareMasterIds || [])
+      .filter((id) => id === SITE_MASTER || masterIds.has(id));
     return state;
   }
 
   const Core = {
-    DEFAULT_TAXONOMY, UNCATEGORIZED, emptyState, mergeDefaultTaxonomy, defaultUnit,
+    DEFAULT_TAXONOMY, UNCATEGORIZED, SITE_MASTER, emptyState,
+    rateOf, compareStandards, addRateMaster, setRate, rateMasterToCsv, importRateMasterCsv, mergeDefaultTaxonomy, defaultUnit,
     findOrAddCategory, findOrAddWorkType, workTypesOfCategory,
     newId, round2, parseTime, hoursFromRange, isBlank, entryQuantity, entryManHours, validateEntry,
     filterEntries, aggregate, pivotByDate, productivity,

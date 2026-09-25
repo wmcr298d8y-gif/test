@@ -18,6 +18,7 @@
     <button role="tab" data-tab="entry" aria-selected="true">入力</button>
     <button role="tab" data-tab="list">一覧</button>
     <button role="tab" data-tab="summary">集計</button>
+    <button role="tab" data-tab="rates">歩掛り</button>
     <button role="tab" data-tab="master">設定</button>
   </nav>
 
@@ -156,8 +157,10 @@
         <h2>歩掛り（実績）</h2>
         <label class="check"><input type="checkbox" id="rate-by-site"> 現場ごとに分ける</label>
       </div>
+      <div class="compare-pick" id="compare-pick"></div>
       <div class="table-scroll" id="summary-rates"></div>
-      <p class="muted small">歩掛り = 期間内の人工合計 ÷ 数量合計。数量を入れていない日の工数も分子に含みます。標準歩掛りは「設定」の工種で登録できます。</p>
+      <p class="muted small">歩掛り = 期間内の人工合計 ÷ 数量合計。数量を入れていない日の工数も分子に含みます。
+        比較欄の % は 実績 ÷ マスタ（100% 超は赤 = マスタより手間がかかっている）。マスタは「歩掛り」タブで登録します。</p>
       <h2>大分類別</h2>
       <div id="summary-by-category"></div>
       <h2>小分類別</h2>
@@ -168,9 +171,36 @@
       <div class="table-scroll" id="summary-pivot"></div>
     </section>
 
+    <!-- 歩掛りマスタ -->
+    <section id="tab-rates" class="panel" role="tabpanel" hidden>
+      <p class="muted small">国交省の標準歩掛りや元請ごとの歩掛りをマスタとして登録し、集計画面で実績と比較できます。
+        歩掛りは 1単位あたりの人工（人工/単位）で入力します。元請のマスタは「設定」の現場にも紐づけられます。</p>
+      <h2>歩掛りマスタ</h2>
+      <form class="add-form" id="rm-add">
+        <input type="text" name="name" placeholder="マスタ名（例: 国交省 R7年度 / ○○建設）" required>
+        <button type="submit">追加</button>
+      </form>
+      <ul class="master-list" id="rm-list"></ul>
+
+      <div id="rm-editor" hidden>
+        <h2 id="rm-title"></h2>
+        <div class="field">
+          <label for="rm-note">メモ <span class="optional">適用年度・出典・元請名・条件など</span></label>
+          <input id="rm-note" type="text">
+        </div>
+        <div class="actions wrap">
+          <button type="button" id="rm-export">CSV 出力（Excel 入力用のひな形）</button>
+          <label class="button">CSV を取り込む<input type="file" id="rm-import" accept=".csv,text/csv" hidden></label>
+        </div>
+        <label class="check rm-only"><input type="checkbox" id="rm-only-set"> 登録済みの小分類だけ表示</label>
+        <div id="rm-rates"></div>
+      </div>
+    </section>
+
     <!-- 設定 -->
     <section id="tab-master" class="panel" role="tabpanel" hidden>
       <h2>現場</h2>
+      <p class="muted small">現場ごとに元請の歩掛りマスタを設定しておくと、集計で「各現場の元請マスタ」と比較できます。</p>
       <form class="add-form" data-master="sites">
         <input type="text" name="name" placeholder="現場名を追加" required>
         <button type="submit">追加</button>
@@ -185,7 +215,7 @@
       <ul class="master-list" id="master-categories"></ul>
 
       <h2>工種（小分類）</h2>
-      <p class="muted small">単位は数量の単位（m・個・台・面 など）、標準歩掛りは 1単位あたりの人工です（任意・実績との比較に使用）。</p>
+      <p class="muted small">単位は数量の単位（m・個・台・面 など）です。歩掛りの値は「歩掛り」タブのマスタで登録します。</p>
       <form class="add-form wt-add" data-master="workTypes">
         <select name="categoryId" aria-label="大分類" required></select>
         <input type="text" name="name" placeholder="小分類を追加" required>
