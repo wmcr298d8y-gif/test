@@ -32,8 +32,8 @@
     return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
 
-  function fmt(n) {
-    return Number(n).toLocaleString('ja-JP', { maximumFractionDigits: 2 });
+  function fmt(n, digits = 2) {
+    return Number(n).toLocaleString('ja-JP', { maximumFractionDigits: digits });
   }
 
   function toISODate(d) {
@@ -87,6 +87,28 @@
     select.innerHTML = (placeholder ? `<option value="">${escapeHtml(placeholder)}</option>` : '') +
       list.map((x) => `<option value="${escapeHtml(x.id)}">${escapeHtml(x.name)}</option>`).join('');
     if (keep && list.some((x) => x.id === current)) select.value = current;
+  }
+
+  /** 大分類に属する小分類だけを select に入れる（大分類未選択なら全件を大分類別にまとめて表示） */
+  function fillWorkTypeSelect(select, categoryId, placeholder) {
+    const current = select.value;
+    const opt = (w) => `<option value="${escapeHtml(w.id)}">${escapeHtml(w.name)}</option>`;
+    let html = `<option value="">${escapeHtml(placeholder)}</option>`;
+    if (categoryId) {
+      html += Core.workTypesOfCategory(state, categoryId).map(opt).join('');
+    } else {
+      html += state.categories.map((c) => {
+        const items = Core.workTypesOfCategory(state, c.id);
+        return items.length ? `<optgroup label="${escapeHtml(c.name)}">${items.map(opt).join('')}</optgroup>` : '';
+      }).join('');
+    }
+    select.innerHTML = html;
+    if ([...select.options].some((o) => o.value === current)) select.value = current;
+  }
+
+  function categoryOf(workTypeId) {
+    const wt = state.workTypes.find((w) => w.id === workTypeId);
+    return wt ? wt.categoryId : '';
   }
 
   // ---------- タブ ----------
@@ -144,6 +166,20 @@
   ['hours', 'people'].forEach((n) => form.elements[n].addEventListener('input', updatePreview));
   form.elements.date.addEventListener('change', renderDayList);
   form.elements.workTypeId.addEventListener('change', updateUnit);
+  form.elements.categoryId.addEventListener('change', () => {
+    fillWorkTypeSelect(form.elements.workTypeId, form.elements.categoryId.value, '選択してください');
+    // 小分類が 1 つだけなら自動で選ぶ
+    const opts = [...form.elements.workTypeId.options].filter((o) => o.value);
+    if (opts.length === 1) form.elements.workTypeId.value = opts[0].value;
+    updateUnit();
+  });
+
+  function setFormWorkType(workTypeId) {
+    form.elements.categoryId.value = categoryOf(workTypeId);
+    fillWorkTypeSelect(form.elements.workTypeId, form.elements.categoryId.value, '選択してください');
+    form.elements.workTypeId.value = workTypeId;
+    updateUnit();
+  }
 
   $$('#quick-hours button').forEach((b) => b.addEventListener('click', () => {
     form.elements.hours.value = b.dataset.h;
@@ -159,12 +195,18 @@
     const keep = keepContext ? {
       date: form.elements.date.value,
       siteId: form.elements.siteId.value,
+      categoryId: form.elements.categoryId.value,
     } : null;
     form.reset();
     form.elements.id.value = '';
     form.elements.date.value = keep ? keep.date : toISODate(new Date());
     if (keep) form.elements.siteId.value = keep.siteId;
     else if (state.settings.lastSiteId) form.elements.siteId.value = state.settings.lastSiteId;
+    if (!form.elements.siteId.value && state.sites.length === 1) form.elements.siteId.value = state.sites[0].id;
+    // 続けて入力しやすいよう大分類は残し、小分類は選び直してもらう
+    form.elements.categoryId.value = keep ? keep.categoryId : '';
+    fillWorkTypeSelect(form.elements.workTypeId, form.elements.categoryId.value, '選択してください');
+    form.elements.workTypeId.value = '';
     $('#submit-btn').textContent = '記録する';
     $('#cancel-edit').hidden = true;
     $('#form-errors').innerHTML = '';
@@ -179,7 +221,7 @@
     form.elements.id.value = e.id;
     form.elements.date.value = e.date;
     form.elements.siteId.value = e.siteId;
-    form.elements.workTypeId.value = e.workTypeId;
+    setFormWorkType(e.workTypeId);
     form.elements.worker.value = e.worker || '';
     form.elements.people.value = e.people;
     form.elements.note.value = e.note || '';
@@ -274,7 +316,7 @@
       const time = e.start && e.end ? `${e.start}〜${e.end}（休憩${e.breakMinutes || 0}分）` : '';
       return `<li class="card">
         <div class="card-main">
-          <div class="card-title"><span class="tag">${escapeHtml(names.workType(e.workTypeId))}</span> ${escapeHtml(names.site(e.siteId))}</div>
+          <div class="card-title"><span class="tag-cat">${escapeHtml(names.categoryOfWorkType(e.workTypeId))} ›</span><span class="tag">${escapeHtml(names.workType(e.workTypeId))}</span> ${escapeHtml(names.site(e.siteId))}</div>
           <div class="card-sub">${formatDate(e.date)} ${escapeHtml(e.worker || '')} ${e.people}人 × ${fmt(e.hours)}h ${escapeHtml(time)}</div>
           ${Core.isBlank(e.quantity) ? '' : `<div class="card-sub">数量 <strong>${fmt(e.quantity)} ${escapeHtml(unitOf(e.workTypeId))}</strong></div>`}
           ${e.note ? `<div class="card-note">${escapeHtml(e.note)}</div>` : ''}
@@ -315,11 +357,11 @@
 
   function readFilters(root) {
     const get = (n) => { const el = $(`[name=${n}]`, root); return el ? el.value : ''; };
-    return { from: get('from'), to: get('to'), siteId: get('siteId'), workTypeId: get('workTypeId') };
+    return { from: get('from'), to: get('to'), siteId: get('siteId'), categoryId: get('categoryId'), workTypeId: get('workTypeId') };
   }
 
   function listFiltered() {
-    return sortedDesc(Core.filterEntries(state.entries, readFilters($('#list-filters'))));
+    return sortedDesc(Core.filterEntries(state.entries, readFilters($('#list-filters')), state.workTypes));
   }
 
   function renderList() {
@@ -328,7 +370,13 @@
     $('#list-count').textContent = `${list.length} 件 / 延べ ${fmt(total)} h（${fmt(Core.round2(total / perDay()))} 人工）`;
     $('#entry-list').innerHTML = entryCards(list);
   }
-  $$('#list-filters input, #list-filters select').forEach((el) => el.addEventListener('change', renderList));
+  $$('#list-filters input, #list-filters select').forEach((el) => el.addEventListener('change', () => {
+    if (el.name === 'categoryId') {
+      const wt = $('#list-filters [name=workTypeId]');
+      fillWorkTypeSelect(wt, el.value, 'すべて');
+    }
+    renderList();
+  }));
 
   // ---------- 集計 ----------
   function barTable(rows, label) {
@@ -348,7 +396,7 @@
 
   function renderSummary() {
     const filters = readFilters($('#summary-filters'));
-    const entries = Core.filterEntries(state.entries, filters);
+    const entries = Core.filterEntries(state.entries, filters, state.workTypes);
     const names = Core.nameLookup(state);
     const total = Core.round2(entries.reduce((s, e) => s + Core.entryManHours(e), 0));
     const days = new Set(entries.map((e) => e.date)).size;
@@ -361,29 +409,33 @@
 
     renderRates(entries);
 
-    const byWt = Core.aggregate(entries, (e) => e.workTypeId, perDay()).map((r) => ({ ...r, name: names.workType(r.key) }));
-    $('#summary-by-worktype').innerHTML = barTable(byWt, '工種');
+    const catKey = (e) => categoryOf(e.workTypeId);
+    const byCat = Core.aggregate(entries, catKey, perDay()).map((r) => ({ ...r, name: names.category(r.key) }));
+    $('#summary-by-category').innerHTML = barTable(byCat, '大分類');
+
+    const byWt = Core.aggregate(entries, (e) => e.workTypeId, perDay()).map((r) => ({ ...r, name: names.workTypeFull(r.key) }));
+    $('#summary-by-worktype').innerHTML = barTable(byWt, '大分類 › 小分類');
 
     const bySite = Core.aggregate(entries, (e) => e.siteId, perDay()).map((r) => ({ ...r, name: names.site(r.key) }));
     $('#summary-by-site').innerHTML = barTable(bySite, '現場');
 
-    const { dates, rows } = Core.pivotByWorkTypeAndDate(entries);
+    const { dates, rows } = Core.pivotByDate(entries, catKey);
     if (!dates.length) {
       $('#summary-pivot').innerHTML = '<p class="muted">データがありません</p>';
       return;
     }
-    const wtIds = byWt.map((r) => r.key);
-    const colTotals = dates.map((d) => Core.round2(wtIds.reduce((s, id) => s + (rows.get(id)[d] || 0), 0)));
+    const keys = byCat.map((r) => r.key);
+    const colTotals = dates.map((d) => Core.round2(keys.reduce((s, id) => s + (rows.get(id)[d] || 0), 0)));
     $('#summary-pivot').innerHTML = `<table class="pivot">
-      <thead><tr><th>工種</th>${dates.map((d) => `<th class="num">${formatDate(d)}</th>`).join('')}<th class="num">合計</th></tr></thead>
-      <tbody>${byWt.map((r) => `<tr><th>${escapeHtml(r.name)}</th>${dates.map((d) => `<td class="num">${rows.get(r.key)[d] ? fmt(rows.get(r.key)[d]) : ''}</td>`).join('')}<td class="num strong">${fmt(r.manHours)}</td></tr>`).join('')}</tbody>
+      <thead><tr><th>大分類</th>${dates.map((d) => `<th class="num">${formatDate(d)}</th>`).join('')}<th class="num">合計</th></tr></thead>
+      <tbody>${byCat.map((r) => `<tr><th>${escapeHtml(r.name)}</th>${dates.map((d) => `<td class="num">${rows.get(r.key)[d] ? fmt(rows.get(r.key)[d]) : ''}</td>`).join('')}<td class="num strong">${fmt(r.manHours)}</td></tr>`).join('')}</tbody>
       <tfoot><tr><th>合計</th>${colTotals.map((t) => `<td class="num">${fmt(t)}</td>`).join('')}<td class="num strong">${fmt(total)}</td></tr></tfoot>
     </table>`;
   }
 
   function renderRates(entries) {
     const bySite = $('#rate-by-site').checked;
-    const rows = Core.productivity(entries, state.workTypes, perDay(), { bySite });
+    const rows = Core.productivity(entries, state.workTypes, perDay(), { bySite, categories: state.categories });
     if (!rows.length) {
       $('#summary-rates').innerHTML = '<p class="muted">データがありません</p>';
       return;
@@ -398,7 +450,7 @@
     };
     $('#summary-rates').innerHTML = `<table class="rates">
       <thead><tr>
-        ${bySite ? '<th>現場</th>' : ''}<th>工種</th>
+        ${bySite ? '<th>現場</th>' : ''}<th>工種</th><th>大分類</th>
         <th class="num">数量</th><th class="num">人工</th>
         <th class="num">歩掛り<br><small>人工/単位</small></th>
         <th class="num">1人工あたり<br><small>施工量</small></th>
@@ -410,11 +462,12 @@
         return `<tr>
           ${bySite ? `<td>${escapeHtml(names.site(r.siteId))}</td>` : ''}
           <td>${escapeHtml(names.workType(r.workTypeId))}</td>
+          <td class="cat-cell">${escapeHtml(names.category(r.categoryId))}</td>
           <td class="num">${r.quantity > 0 ? `${fmt(r.quantity)} ${unit}` : '<span class="muted">未入力</span>'}</td>
           <td class="num">${fmt(r.manDays)}</td>
-          <td class="num rate-val">${r.rate === null ? '<span class="muted">—</span>' : `${fmt(r.rate)}<small> 人工/${unit || '単位'}</small>`}</td>
+          <td class="num rate-val">${r.rate === null ? '<span class="muted">—</span>' : `${fmt(r.rate, 3)}<small> 人工/${unit || '単位'}</small>`}</td>
           <td class="num">${cell(r.output, ` ${unit}`)}</td>
-          <td class="num">${cell(r.standardRate)}</td>
+          <td class="num">${r.standardRate === null ? '<span class="muted">—</span>' : fmt(r.standardRate, 3)}</td>
           <td class="num">${ratioCell(r)}</td>
           <td class="num">${r.days}日 (${r.quantityDays}日)</td>
         </tr>`;
@@ -451,31 +504,72 @@
 
   // ---------- マスタ ----------
   function usageCount(key, id) {
-    const field = key === 'sites' ? 'siteId' : key === 'workTypes' ? 'workTypeId' : null;
-    if (!field) return 0;
-    return state.entries.filter((e) => e[field] === id).length;
+    if (key === 'sites') return state.entries.filter((e) => e.siteId === id).length;
+    if (key === 'workTypes') return state.entries.filter((e) => e.workTypeId === id).length;
+    if (key === 'categories') {
+      const ids = new Set(Core.workTypesOfCategory(state, id).map((w) => w.id));
+      return state.entries.filter((e) => ids.has(e.workTypeId)).length;
+    }
+    return 0;
   }
 
+  function masterActions(key, id, canUp) {
+    return `<span class="master-actions">
+      <button type="button" data-master-act="up" data-key="${key}" data-id="${id}" ${canUp ? '' : 'disabled'} aria-label="上へ">↑</button>
+      <button type="button" data-master-act="rename" data-key="${key}" data-id="${id}">名前変更</button>
+      <button type="button" data-master-act="del" data-key="${key}" data-id="${id}" class="danger">削除</button>
+    </span>`;
+  }
+
+  function simpleList(key, extraLabel) {
+    const list = state[key];
+    return list.length ? list.map((x, i) => {
+      const used = usageCount(key, x.id);
+      return `<li>
+        <span class="master-name">${escapeHtml(x.name)}${extraLabel ? extraLabel(x) : ''}${used ? ` <small class="muted">${used}件</small>` : ''}</span>
+        ${masterActions(key, x.id, i > 0)}
+      </li>`;
+    }).join('') : '<li class="muted">未登録</li>';
+  }
+
+  function workTypeRow(x, i) {
+    const used = usageCount('workTypes', x.id);
+    const catOptions = state.categories.map((c) =>
+      `<option value="${escapeHtml(c.id)}" ${c.id === x.categoryId ? 'selected' : ''}>${escapeHtml(c.name)}</option>`).join('');
+    return `<li class="wt-row">
+      <span class="master-name">${escapeHtml(x.name)}${used ? ` <small class="muted">${used}件</small>` : ''}
+        <span class="wt-extra">
+          <label>単位<input type="text" class="wt-unit" data-wt-field="unit" data-id="${x.id}" value="${escapeHtml(x.unit || '')}" placeholder="m など"></label>
+          <label>標準歩掛り（人工/${escapeHtml(x.unit || '単位')}）<input type="number" class="wt-std" data-wt-field="standardRate" data-id="${x.id}" value="${escapeHtml(x.standardRate ?? '')}" min="0" step="any" inputmode="decimal" placeholder="未設定"></label>
+          <label>大分類<select data-wt-field="categoryId" data-id="${x.id}">${catOptions}</select></label>
+        </span>
+      </span>
+      ${masterActions('workTypes', x.id, i > 0)}
+    </li>`;
+  }
+
+  // 再描画しても開いている大分類の折りたたみ状態を保つ
+  const openGroups = new Set();
+  $('#master-workTypes').addEventListener('toggle', (ev) => {
+    const d = ev.target;
+    if (!d.dataset || !d.dataset.cat) return;
+    if (d.open) openGroups.add(d.dataset.cat); else openGroups.delete(d.dataset.cat);
+  }, true);
+
   function renderMaster() {
-    for (const key of ['sites', 'workTypes', 'workers']) {
-      const ul = $('#master-' + key);
-      const list = state[key];
-      ul.innerHTML = list.length ? list.map((x, i) => {
-        const used = usageCount(key, x.id);
-        const extra = key === 'workTypes' ? `<span class="wt-extra">
-            <label>単位<input type="text" class="wt-unit" data-wt-field="unit" data-id="${x.id}" value="${escapeHtml(x.unit || '')}" placeholder="m² など"></label>
-            <label>標準歩掛り（人工/${escapeHtml(x.unit || '単位')}）<input type="number" class="wt-std" data-wt-field="standardRate" data-id="${x.id}" value="${escapeHtml(x.standardRate ?? '')}" min="0" step="any" inputmode="decimal" placeholder="未設定"></label>
-          </span>` : '';
-        return `<li class="${key === 'workTypes' ? 'wt-row' : ''}">
-          <span class="master-name">${escapeHtml(x.name)}${used ? ` <small class="muted">${used}件</small>` : ''}${extra}</span>
-          <span class="master-actions">
-            <button type="button" data-master-act="up" data-key="${key}" data-id="${x.id}" ${i === 0 ? 'disabled' : ''} aria-label="上へ">↑</button>
-            <button type="button" data-master-act="rename" data-key="${key}" data-id="${x.id}">名前変更</button>
-            <button type="button" data-master-act="del" data-key="${key}" data-id="${x.id}" class="danger">削除</button>
-          </span>
-        </li>`;
-      }).join('') : '<li class="muted">未登録</li>';
-    }
+    $('#master-sites').innerHTML = simpleList('sites');
+    $('#master-workers').innerHTML = simpleList('workers');
+    $('#master-categories').innerHTML = simpleList('categories',
+      (c) => ` <small class="muted">小分類 ${Core.workTypesOfCategory(state, c.id).length}</small>`);
+    $('#master-workTypes').innerHTML = state.categories.map((c) => {
+      const items = Core.workTypesOfCategory(state, c.id);
+      const open = openGroups.has(c.id) ? 'open' : '';
+      const stdCount = items.filter((w) => !Core.isBlank(w.standardRate)).length;
+      return `<details class="wt-group" data-cat="${escapeHtml(c.id)}" ${open}>
+        <summary>${escapeHtml(c.name)} <small class="muted">小分類 ${items.length}・標準歩掛り設定 ${stdCount}</small></summary>
+        <ul class="master-list">${items.length ? items.map(workTypeRow).join('') : '<li class="muted">小分類なし</li>'}</ul>
+      </details>`;
+    }).join('') || '<p class="muted">先に大分類を登録してください</p>';
     $('#s-perday').value = perDay();
   }
 
@@ -484,15 +578,25 @@
     const key = f.dataset.master;
     const name = f.elements.name.value.trim();
     if (!name) return;
-    if (state[key].some((x) => x.name === name)) { toast('同じ名前がすでに登録されています'); return; }
-    const item = { id: Core.newId(), name };
     if (key === 'workTypes') {
-      item.unit = f.elements.unit.value.trim() || Core.DEFAULT_WORK_TYPE_UNITS[name] || '';
-      item.standardRate = '';
+      const categoryId = f.elements.categoryId.value;
+      if (!categoryId) { toast('大分類を選択してください'); return; }
+      if (state.workTypes.some((w) => w.categoryId === categoryId && w.name === name)) {
+        toast('同じ大分類に同じ名前の小分類があります');
+        return;
+      }
+      state.workTypes.push({
+        id: Core.newId(), categoryId, name,
+        unit: f.elements.unit.value.trim() || Core.defaultUnit(name), standardRate: '',
+      });
+      f.elements.name.value = '';
+      f.elements.unit.value = '';
+    } else {
+      if (state[key].some((x) => x.name === name)) { toast('同じ名前がすでに登録されています'); return; }
+      state[key].push({ id: Core.newId(), name });
+      f.reset();
     }
-    state[key].push(item);
     save();
-    f.reset();
     render();
   }));
 
@@ -503,13 +607,21 @@
     const list = state[key];
     const i = list.findIndex((x) => x.id === id);
     if (i < 0) return;
-    if (masterAct === 'up' && i > 0) {
-      [list[i - 1], list[i]] = [list[i], list[i - 1]];
+    if (masterAct === 'up') {
+      // 小分類は同じ大分類の中で 1 つ上と入れ替える
+      let j = i - 1;
+      if (key === 'workTypes') while (j >= 0 && list[j].categoryId !== list[i].categoryId) j--;
+      if (j < 0) return;
+      [list[j], list[i]] = [list[i], list[j]];
     } else if (masterAct === 'rename') {
       const name = prompt('新しい名前', list[i].name);
       if (!name || !name.trim()) return;
       list[i].name = name.trim();
     } else if (masterAct === 'del') {
+      if (key === 'categories' && Core.workTypesOfCategory(state, id).length) {
+        alert(`「${list[i].name}」には小分類があります。先に小分類を削除するか、別の大分類へ移動してください。`);
+        return;
+      }
       const used = usageCount(key, id);
       const msg = used
         ? `「${list[i].name}」は ${used} 件の記録で使われています。削除すると記録の表示が「(削除済み)」になります。削除しますか？`
@@ -522,14 +634,19 @@
   });
 
   document.addEventListener('change', (ev) => {
-    const input = ev.target.closest('input[data-wt-field]');
+    const input = ev.target.closest('[data-wt-field]');
     if (!input) return;
     const wt = state.workTypes.find((w) => w.id === input.dataset.id);
     if (!wt) return;
-    if (input.dataset.wtField === 'standardRate') {
+    const field = input.dataset.wtField;
+    if (field === 'standardRate') {
       const v = input.value.trim();
       if (v !== '' && !(Number(v) >= 0)) { input.value = wt.standardRate ?? ''; return; }
       wt.standardRate = v === '' ? '' : Number(v);
+    } else if (field === 'categoryId') {
+      wt.categoryId = input.value;
+      // 移動先の大分類の末尾に並べる
+      state.workTypes = state.workTypes.filter((w) => w !== wt).concat(wt);
     } else {
       wt.unit = input.value.trim();
     }
@@ -537,6 +654,13 @@
     render();
     updateUnit();
     toast('保存しました');
+  });
+
+  $('#merge-defaults').addEventListener('click', () => {
+    const added = Core.mergeDefaultTaxonomy(state);
+    save();
+    render();
+    toast(added ? `${added} 件の小分類を追加しました` : '追加する工種はありません（すべて登録済み）');
   });
 
   $('#s-perday').addEventListener('change', (ev) => {
@@ -609,12 +733,17 @@
   // ---------- 描画 ----------
   function renderSelects() {
     fillSelect(form.elements.siteId, state.sites, { placeholder: state.sites.length ? '選択してください' : '先に「設定」で現場を登録' });
-    fillSelect(form.elements.workTypeId, state.workTypes, { placeholder: '選択してください' });
+    if (!form.elements.siteId.value && state.sites.length === 1) form.elements.siteId.value = state.sites[0].id;
+    fillSelect(form.elements.categoryId, state.categories, { placeholder: '選択してください' });
+    fillWorkTypeSelect(form.elements.workTypeId, form.elements.categoryId.value, '選択してください');
     for (const root of [$('#list-filters'), $('#summary-filters')]) {
       fillSelect($('[name=siteId]', root), state.sites, { placeholder: 'すべて' });
+      const cat = $('[name=categoryId]', root);
+      fillSelect(cat, state.categories, { placeholder: 'すべて' });
       const wt = $('[name=workTypeId]', root);
-      if (wt) fillSelect(wt, state.workTypes, { placeholder: 'すべて' });
+      if (wt) fillWorkTypeSelect(wt, cat.value, 'すべて');
     }
+    fillSelect($('.wt-add [name=categoryId]'), state.categories, { placeholder: '大分類を選択' });
     $('#worker-list').innerHTML = state.workers.map((w) => `<option value="${escapeHtml(w.name)}">`).join('');
   }
 

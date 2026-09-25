@@ -35,7 +35,11 @@
           <select id="f-site" name="siteId" required></select>
         </div>
         <div class="field">
-          <label for="f-worktype">工種</label>
+          <label for="f-category">工種（大分類）</label>
+          <select id="f-category" name="categoryId" required></select>
+        </div>
+        <div class="field">
+          <label for="f-worktype">工種（小分類）</label>
           <select id="f-worktype" name="workTypeId" required></select>
         </div>
         <div class="field">
@@ -120,7 +124,8 @@
         <div class="field"><label>開始日</label><input type="date" name="from"></div>
         <div class="field"><label>終了日</label><input type="date" name="to"></div>
         <div class="field"><label>現場</label><select name="siteId"></select></div>
-        <div class="field"><label>工種</label><select name="workTypeId"></select></div>
+        <div class="field"><label>大分類</label><select name="categoryId"></select></div>
+        <div class="field"><label>小分類</label><select name="workTypeId"></select></div>
       </div>
       <p class="muted" id="list-count"></p>
       <div id="entry-list"></div>
@@ -135,6 +140,7 @@
         <div class="field"><label>開始日</label><input type="date" name="from"></div>
         <div class="field"><label>終了日</label><input type="date" name="to"></div>
         <div class="field"><label>現場</label><select name="siteId"></select></div>
+        <div class="field"><label>大分類</label><select name="categoryId"></select></div>
         <div class="field wide">
           <label>期間</label>
           <div class="quick" id="period-quick">
@@ -152,11 +158,13 @@
       </div>
       <div class="table-scroll" id="summary-rates"></div>
       <p class="muted small">歩掛り = 期間内の人工合計 ÷ 数量合計。数量を入れていない日の工数も分子に含みます。標準歩掛りは「設定」の工種で登録できます。</p>
-      <h2>工種別</h2>
+      <h2>大分類別</h2>
+      <div id="summary-by-category"></div>
+      <h2>小分類別</h2>
       <div id="summary-by-worktype"></div>
       <h2>現場別</h2>
       <div id="summary-by-site"></div>
-      <h2>工種 × 日付（延べ工数 h）</h2>
+      <h2>大分類 × 日付（延べ工数 h）</h2>
       <div class="table-scroll" id="summary-pivot"></div>
     </section>
 
@@ -169,14 +177,25 @@
       </form>
       <ul class="master-list" id="master-sites"></ul>
 
-      <h2>工種</h2>
-      <p class="muted small">単位は数量の単位（m³・m²・t など）、標準歩掛りは 1単位あたりの人工です（任意・実績との比較に使用）。</p>
-      <form class="add-form" data-master="workTypes">
-        <input type="text" name="name" placeholder="工種を追加" required>
+      <h2>工種（大分類）</h2>
+      <form class="add-form" data-master="categories">
+        <input type="text" name="name" placeholder="大分類を追加" required>
+        <button type="submit">追加</button>
+      </form>
+      <ul class="master-list" id="master-categories"></ul>
+
+      <h2>工種（小分類）</h2>
+      <p class="muted small">単位は数量の単位（m・個・台・面 など）、標準歩掛りは 1単位あたりの人工です（任意・実績との比較に使用）。</p>
+      <form class="add-form wt-add" data-master="workTypes">
+        <select name="categoryId" aria-label="大分類" required></select>
+        <input type="text" name="name" placeholder="小分類を追加" required>
         <input type="text" name="unit" placeholder="単位" class="unit-input">
         <button type="submit">追加</button>
       </form>
-      <ul class="master-list" id="master-workTypes"></ul>
+      <div id="master-workTypes"></div>
+      <div class="actions wrap">
+        <button type="button" id="merge-defaults">電気設備の標準工種を追加（不足分のみ）</button>
+      </div>
 
       <h2>作業者・業者（入力候補）</h2>
       <form class="add-form" data-master="workers">

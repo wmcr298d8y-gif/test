@@ -225,3 +225,15 @@ thead th { font-size: 0.8rem; color: var(--muted); }
 .wt-extra .wt-unit { width: 5em; }
 .wt-extra .wt-std { width: 9em; }
 .master-list li.wt-row { align-items: flex-start; }
+
+.tag-cat { font-size: 0.75rem; color: var(--muted); margin-right: 4px; }
+.wt-add { flex-wrap: wrap; }
+.wt-add select { flex: 1 1 100%; }
+.wt-group { margin-top: 8px; }
+.wt-group > summary {
+  cursor: pointer; padding: 10px 12px; font-weight: 700; color: var(--primary);
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.wt-group[open] > summary { border-radius: var(--radius) var(--radius) 0 0; }
+.wt-group > .master-list { margin-top: 0; border-top: 0; border-radius: 0 0 var(--radius) var(--radius); }
+.cat-cell { color: var(--muted); font-size: 0.8rem; }

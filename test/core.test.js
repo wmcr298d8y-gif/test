@@ -5,14 +5,42 @@ const Core = require('../js/core.js');
 function sampleState() {
   const s = Core.emptyState();
   s.sites = [{ id: 's1', name: 'A現場' }, { id: 's2', name: 'B現場' }];
-  s.workTypes = [{ id: 'w1', name: '土工事' }, { id: 'w2', name: '型枠工事' }];
+  s.categories = [{ id: 'c1', name: '配管工事' }, { id: 'c2', name: '照明・配線器具' }];
+  s.workTypes = [
+    { id: 'w1', categoryId: 'c1', name: '電線管敷設（露出）', unit: 'm', standardRate: '' },
+    { id: 'w2', categoryId: 'c2', name: '照明器具取付', unit: '台', standardRate: '' },
+    { id: 'w3', categoryId: 'c1', name: 'ボックス取付', unit: '個', standardRate: '' },
+  ];
   s.entries = [
     { id: 'e1', date: '2026-09-01', siteId: 's1', workTypeId: 'w1', people: 3, hours: 8 },
     { id: 'e2', date: '2026-09-01', siteId: 's1', workTypeId: 'w2', people: 2, hours: 4, note: 'カンマ,"引用"' },
     { id: 'e3', date: '2026-09-02', siteId: 's2', workTypeId: 'w1', people: 1, hours: 6 },
+    { id: 'e4', date: '2026-09-02', siteId: 's2', workTypeId: 'w3', people: 1, hours: 2 },
   ];
   return s;
 }
+
+test('emptyState: 電気設備の標準工種が大分類・小分類で登録される', () => {
+  const s = Core.emptyState();
+  assert.equal(s.categories.length, Core.DEFAULT_TAXONOMY.length);
+  const haikan = s.categories.find((c) => c.name === '配管工事');
+  const items = Core.workTypesOfCategory(s, haikan.id);
+  assert.ok(items.some((w) => w.name === '電線管敷設（露出）' && w.unit === 'm'));
+  // すべての小分類が存在する大分類に属する
+  const catIds = new Set(s.categories.map((c) => c.id));
+  assert.ok(s.workTypes.every((w) => catIds.has(w.categoryId)));
+  // ID の重複がない
+  assert.equal(new Set(s.workTypes.map((w) => w.id)).size, s.workTypes.length);
+});
+
+test('mergeDefaultTaxonomy: 不足分だけ追加する', () => {
+  const s = Core.emptyState();
+  const before = s.workTypes.length;
+  assert.equal(Core.mergeDefaultTaxonomy(s), 0);
+  s.workTypes = s.workTypes.filter((w) => w.name !== 'LAN配線');
+  assert.equal(Core.mergeDefaultTaxonomy(s), 1);
+  assert.equal(s.workTypes.length, before);
+});
 
 test('hoursFromRange: 休憩を差し引き、日跨ぎに対応', () => {
   assert.equal(Core.hoursFromRange('08:00', '17:00', 60), 8);
@@ -23,123 +51,141 @@ test('hoursFromRange: 休憩を差し引き、日跨ぎに対応', () => {
 });
 
 test('validateEntry', () => {
-  assert.deepEqual(Core.validateEntry({ date: '2026-09-01', siteId: 's', workTypeId: 'w', people: 1, hours: 8 }), []);
-  assert.equal(Core.validateEntry({ date: '', siteId: '', workTypeId: '', people: 0, hours: 30 }).length, 5);
-});
-
-test('aggregate: 工種別の延べ工数と人工', () => {
-  const s = sampleState();
-  const rows = Core.aggregate(s.entries, (e) => e.workTypeId, 8);
-  assert.deepEqual(rows.map((r) => [r.key, r.manHours, r.manDays, r.count]), [
-    ['w1', 30, 3.75, 2],
-    ['w2', 8, 1, 1],
-  ]);
-});
-
-test('filterEntries: 期間と現場', () => {
-  const s = sampleState();
-  assert.deepEqual(Core.filterEntries(s.entries, { from: '2026-09-02' }).map((e) => e.id), ['e3']);
-  assert.deepEqual(Core.filterEntries(s.entries, { siteId: 's1', to: '2026-09-01' }).map((e) => e.id), ['e1', 'e2']);
-});
-
-test('pivotByWorkTypeAndDate', () => {
-  const { dates, rows } = Core.pivotByWorkTypeAndDate(sampleState().entries);
-  assert.deepEqual(dates, ['2026-09-01', '2026-09-02']);
-  assert.deepEqual(rows.get('w1'), { '2026-09-01': 24, '2026-09-02': 6 });
-});
-
-test('CSV 出力 → 取り込みで往復できる', () => {
-  const src = sampleState();
-  const csv = Core.entriesToCsv(src, src.entries);
-  assert.ok(csv.startsWith('﻿日付,現場,工種'));
-
-  const dst = Core.emptyState();
-  const { added, errors } = Core.importCsv(dst, csv);
-  assert.deepEqual(errors, []);
-  assert.equal(added, 3);
-  assert.ok(dst.sites.some((x) => x.name === 'B現場'));
-  const e2 = dst.entries.find((e) => e.hours === 4);
-  assert.equal(e2.note, 'カンマ,"引用"');
-  const names = Core.nameLookup(dst);
-  assert.equal(names.workType(e2.workTypeId), '型枠工事');
-});
-
-test('importCsv: 不正行はエラーとして報告', () => {
-  const s = Core.emptyState();
-  const { added, errors } = Core.importCsv(s, '日付,現場,工種,人数,時間(h/人)\n2026/09/01,A,土工事,2,8\nxx,A,土工事,1,8\n');
-  assert.equal(added, 1);
-  assert.equal(s.entries[0].date, '2026-09-01');
-  assert.equal(errors.length, 1);
-  assert.match(errors[0], /^3行目/);
-});
-
-test('normalizeState: 壊れたデータでも既定値で補完', () => {
-  const s = Core.normalizeState({ entries: [{ id: 'x' }], settings: { hoursPerManDay: 7.5 } });
-  assert.equal(s.entries.length, 1);
-  assert.equal(s.settings.hoursPerManDay, 7.5);
-  assert.equal(s.workTypes.length, Core.DEFAULT_WORK_TYPES.length);
-  assert.equal(Core.normalizeState(null).entries.length, 0);
-});
-
-test('productivity: 歩掛り = 人工合計 ÷ 数量合計（数量未入力日の工数も含む）', () => {
-  const s = Core.emptyState();
-  s.workTypes = [{ id: 'kata', name: '型枠工事', unit: 'm²', standardRate: 0.1 }, { id: 'do', name: '土工事', unit: 'm³', standardRate: '' }];
-  s.entries = [
-    // 型枠: 4人×8h=4人工 で 30m²、翌日 2人×8h=2人工（数量なし）、翌々日 2人×8h=2人工 で 50m²
-    { date: '2026-09-01', siteId: 'A', workTypeId: 'kata', people: 4, hours: 8, quantity: 30 },
-    { date: '2026-09-02', siteId: 'A', workTypeId: 'kata', people: 2, hours: 8, quantity: '' },
-    { date: '2026-09-03', siteId: 'B', workTypeId: 'kata', people: 2, hours: 8, quantity: 50 },
-    // 土工事: 数量なし
-    { date: '2026-09-01', siteId: 'A', workTypeId: 'do', people: 1, hours: 8 },
-  ];
-  const rows = Core.productivity(s.entries, s.workTypes, 8);
-  const kata = rows.find((r) => r.workTypeId === 'kata');
-  assert.equal(kata.manDays, 8);
-  assert.equal(kata.quantity, 80);
-  assert.equal(kata.rate, 0.1);       // 8人工 / 80m²
-  assert.equal(kata.output, 10);      // 80m² / 8人工
-  assert.equal(kata.ratio, 100);      // 標準 0.1 と同じ
-  assert.equal(kata.unit, 'm²');
-  assert.equal(kata.days, 3);
-  assert.equal(kata.quantityDays, 2);
-
-  const doko = rows.find((r) => r.workTypeId === 'do');
-  assert.equal(doko.rate, null);
-  assert.equal(doko.ratio, null);
-
-  const bySite = Core.productivity(s.entries, s.workTypes, 8, { bySite: true });
-  const a = bySite.find((r) => r.siteId === 'A' && r.workTypeId === 'kata');
-  const b = bySite.find((r) => r.siteId === 'B' && r.workTypeId === 'kata');
-  assert.equal(a.rate, 0.2);          // 6人工 / 30m²
-  assert.equal(b.rate, 0.04);         // 2人工 / 50m²
-  assert.equal(a.ratio, 200);
-});
-
-test('validateEntry: 数量は任意だが負数は不可', () => {
   const base = { date: '2026-09-01', siteId: 's', workTypeId: 'w', people: 1, hours: 8 };
+  assert.deepEqual(Core.validateEntry(base), []);
+  assert.equal(Core.validateEntry({ date: '', siteId: '', workTypeId: '', people: 0, hours: 30 }).length, 5);
   assert.deepEqual(Core.validateEntry({ ...base, quantity: '' }), []);
   assert.deepEqual(Core.validateEntry({ ...base, quantity: 12.5 }), []);
   assert.equal(Core.validateEntry({ ...base, quantity: -1 }).length, 1);
 });
 
-test('数量・単位も CSV で往復できる', () => {
-  const src = Core.emptyState();
-  src.sites = [{ id: 's1', name: 'A現場' }];
-  src.workTypes = [{ id: 'w1', name: '鉄筋工事', unit: 't', standardRate: '' }];
-  src.entries = [{ id: 'e1', date: '2026-09-01', siteId: 's1', workTypeId: 'w1', people: 5, hours: 8, quantity: 2.5 }];
-  const csv = Core.entriesToCsv(src, src.entries);
-  assert.match(csv, /,2\.5,t,/);
-  const dst = Core.emptyState();
-  dst.workTypes = [];
-  const { added } = Core.importCsv(dst, csv);
-  assert.equal(added, 1);
-  assert.equal(dst.entries[0].quantity, 2.5);
-  assert.equal(dst.workTypes[0].unit, 't');
+test('aggregate: 小分類別・大分類別の延べ工数と人工', () => {
+  const s = sampleState();
+  const byWt = Core.aggregate(s.entries, (e) => e.workTypeId, 8);
+  assert.deepEqual(byWt.map((r) => [r.key, r.manHours, r.manDays, r.count]), [
+    ['w1', 30, 3.75, 2],
+    ['w2', 8, 1, 1],
+    ['w3', 2, 0.25, 1],
+  ]);
+  const catOf = new Map(s.workTypes.map((w) => [w.id, w.categoryId]));
+  const byCat = Core.aggregate(s.entries, (e) => catOf.get(e.workTypeId), 8);
+  assert.deepEqual(byCat.map((r) => [r.key, r.manHours]), [['c1', 32], ['c2', 8]]);
 });
 
-test('normalizeState: 単位のない旧データの工種に既定単位を補う', () => {
-  const s = Core.normalizeState({ workTypes: [{ id: 'a', name: '型枠工事' }, { id: 'b', name: '独自工種' }, { id: 'c', name: '土工事', unit: '台' }] });
-  assert.equal(s.workTypes[0].unit, 'm²');
-  assert.equal(s.workTypes[1].unit, '');
-  assert.equal(s.workTypes[2].unit, '台');
+test('filterEntries: 期間・現場・大分類・小分類', () => {
+  const s = sampleState();
+  const ids = (f) => Core.filterEntries(s.entries, f, s.workTypes).map((e) => e.id);
+  assert.deepEqual(ids({ from: '2026-09-02' }), ['e3', 'e4']);
+  assert.deepEqual(ids({ siteId: 's1', to: '2026-09-01' }), ['e1', 'e2']);
+  assert.deepEqual(ids({ categoryId: 'c1' }), ['e1', 'e3', 'e4']);
+  assert.deepEqual(ids({ categoryId: 'c1', workTypeId: 'w3' }), ['e4']);
+});
+
+test('pivotByDate', () => {
+  const s = sampleState();
+  const catOf = new Map(s.workTypes.map((w) => [w.id, w.categoryId]));
+  const { dates, rows } = Core.pivotByDate(s.entries, (e) => catOf.get(e.workTypeId));
+  assert.deepEqual(dates, ['2026-09-01', '2026-09-02']);
+  assert.deepEqual(rows.get('c1'), { '2026-09-01': 24, '2026-09-02': 8 });
+});
+
+test('nameLookup: 大分類 › 小分類', () => {
+  const names = Core.nameLookup(sampleState());
+  assert.equal(names.workTypeFull('w2'), '照明・配線器具 › 照明器具取付');
+  assert.equal(names.categoryOfWorkType('w1'), '配管工事');
+  assert.equal(names.workType('nope'), '(削除済み)');
+});
+
+test('productivity: 歩掛り = 人工合計 ÷ 数量合計（数量未入力日の工数も含む）', () => {
+  const workTypes = [
+    { id: 'kan', categoryId: 'c1', name: '電線管敷設（露出）', unit: 'm', standardRate: 0.02 },
+    { id: 'lan', categoryId: 'c2', name: 'LAN配線', unit: 'm', standardRate: '' },
+  ];
+  const entries = [
+    // 配管: 2人×8h=2人工 で 60m、翌日 2人×8h=2人工（数量なし）、翌々日 2人×8h=2人工 で 140m
+    { date: '2026-09-01', siteId: 'A', workTypeId: 'kan', people: 2, hours: 8, quantity: 60 },
+    { date: '2026-09-02', siteId: 'A', workTypeId: 'kan', people: 2, hours: 8, quantity: '' },
+    { date: '2026-09-03', siteId: 'B', workTypeId: 'kan', people: 2, hours: 8, quantity: 140 },
+    { date: '2026-09-01', siteId: 'A', workTypeId: 'lan', people: 1, hours: 8 },
+  ];
+  const rows = Core.productivity(entries, workTypes, 8);
+  const kan = rows.find((r) => r.workTypeId === 'kan');
+  assert.equal(kan.manDays, 6);
+  assert.equal(kan.quantity, 200);
+  assert.equal(kan.rate, 0.03);       // 6人工 / 200m
+  assert.equal(kan.output, 33.33);    // 200m / 6人工
+  assert.equal(kan.ratio, 150);       // 標準 0.02 の 1.5 倍
+  assert.equal(kan.unit, 'm');
+  assert.equal(kan.categoryId, 'c1');
+  assert.equal(kan.days, 3);
+  assert.equal(kan.quantityDays, 2);
+
+  const lan = rows.find((r) => r.workTypeId === 'lan');
+  assert.equal(lan.rate, null);
+  assert.equal(lan.ratio, null);
+
+  const bySite = Core.productivity(entries, workTypes, 8, { bySite: true });
+  assert.equal(bySite.find((r) => r.siteId === 'A' && r.workTypeId === 'kan').rate, 0.067); // 4人工 / 60m
+  assert.equal(bySite.find((r) => r.siteId === 'B' && r.workTypeId === 'kan').rate, 0.014); // 2人工 / 140m
+});
+
+test('productivity: categories を渡すと大分類・小分類の登録順に並ぶ', () => {
+  const s = sampleState();
+  const rows = Core.productivity(s.entries, s.workTypes, 8, { categories: s.categories });
+  assert.deepEqual(rows.map((r) => r.workTypeId), ['w1', 'w3', 'w2']);
+});
+
+test('CSV 出力 → 取り込みで往復できる（大分類・小分類・数量）', () => {
+  const src = sampleState();
+  src.entries[0].quantity = 45.5;
+  const csv = Core.entriesToCsv(src, src.entries);
+  assert.ok(csv.startsWith('﻿日付,現場,大分類,小分類'));
+  assert.match(csv, /配管工事,電線管敷設（露出）,.*,45\.5,m,/);
+
+  const dst = Core.emptyState();
+  const before = dst.workTypes.length;
+  const { added, errors } = Core.importCsv(dst, csv);
+  assert.deepEqual(errors, []);
+  assert.equal(added, 4);
+  // 標準工種と同名のものは既存の小分類に紐づき、増えない
+  assert.equal(dst.workTypes.length, before);
+  const names = Core.nameLookup(dst);
+  const e1 = dst.entries.find((e) => e.quantity === 45.5);
+  assert.equal(names.workTypeFull(e1.workTypeId), '配管工事 › 電線管敷設（露出）');
+  const e2 = dst.entries.find((e) => e.hours === 4);
+  assert.equal(e2.note, 'カンマ,"引用"');
+  assert.ok(dst.sites.some((x) => x.name === 'B現場'));
+});
+
+test('importCsv: 旧形式（工種列のみ）は未分類に入れ、不正行はエラー報告', () => {
+  const s = Core.emptyState();
+  const { added, errors } = Core.importCsv(s, '日付,現場,工種,人数,時間(h/人)\n2026/09/01,A,独自作業,2,8\nxx,A,独自作業,1,8\n');
+  assert.equal(added, 1);
+  assert.equal(s.entries[0].date, '2026-09-01');
+  assert.equal(Core.nameLookup(s).workTypeFull(s.entries[0].workTypeId), '未分類 › 独自作業');
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /^3行目/);
+});
+
+test('normalizeState: 旧データ（大分類なし）は工種を「未分類」にまとめる', () => {
+  const s = Core.normalizeState({
+    workTypes: [{ id: 'a', name: '照明器具取付' }, { id: 'b', name: '独自工種', unit: '台' }],
+    entries: [{ id: 'x', workTypeId: 'a' }],
+    settings: { hoursPerManDay: 7.5 },
+  });
+  assert.equal(s.categories.length, 1);
+  assert.equal(s.categories[0].name, '未分類');
+  assert.ok(s.workTypes.every((w) => w.categoryId === s.categories[0].id));
+  assert.equal(s.workTypes[0].unit, '台'); // 標準工種と同名なら既定単位を補う
+  assert.equal(s.workTypes[1].unit, '台');
+  assert.equal(s.entries.length, 1);
+  assert.equal(s.settings.hoursPerManDay, 7.5);
+});
+
+test('normalizeState: 壊れたデータでも既定値で補完', () => {
+  const s = Core.normalizeState(null);
+  assert.equal(s.entries.length, 0);
+  assert.equal(s.categories.length, Core.DEFAULT_TAXONOMY.length);
+  const t = Core.normalizeState({ entries: [] });
+  assert.equal(t.categories.length, Core.DEFAULT_TAXONOMY.length);
 });
