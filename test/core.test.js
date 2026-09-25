@@ -434,3 +434,165 @@ test('siteDateRange', () => {
   assert.deepEqual(Core.siteDateRange(s, 's1'), { first: '2026-09-01', last: '2026-09-01' });
   assert.deepEqual(Core.siteDateRange(s, 'none'), { first: '', last: '' });
 });
+
+// ---------- 日報 ----------
+
+function reportState() {
+  const s = sampleState();
+  s.reports = [];
+  s.employees = [{ id: 'emp1', code: 'E001', name: '山田 太郎' }];
+  return s;
+}
+
+test('日報: 保存・置き換え・空行の除去', () => {
+  const s = reportState();
+  const r = Core.draftReport(s, '2026-09-24', 's1').report;
+  r.inputBy = 'emp1';
+  r.weather = '晴';
+  r.crew = { own: 3, subs: [{ name: '△△電設', people: 2 }, { name: '', people: 0 }] };
+  r.tasks = [
+    { id: 't1', place: '2F 西側', work: '配管', workTypeId: 'w1', status: 'done', memo: '' },
+    { id: 't2', place: '3F', work: '分電盤 据付', workTypeId: '', status: 'partial', memo: '盤2面のうち1面' },
+    { id: 't3', place: '', work: '', status: 'notyet', memo: '' }, // 空行
+  ];
+  r.tomorrow = [{ id: 'p1', place: '3F', work: '盤内結線' }];
+  const res = Core.saveReport(s, r, 100, { requireInputBy: true });
+  assert.deepEqual(res.errors, []);
+  assert.equal(s.reports.length, 1);
+  const saved = Core.findReport(s, '2026-09-24', 's1');
+  assert.equal(saved.tasks.length, 2);
+  assert.deepEqual(saved.crew, { own: 3, subs: [{ name: '△△電設', people: 2 }] });
+  assert.equal(Core.crewTotal(saved), 5);
+  assert.equal(saved.createdAt, 100);
+
+  // 同じ日・現場は置き換え（作成日時は残る）
+  const again = Core.draftReport(s, '2026-09-24', 's1');
+  assert.equal(again.saved, true);
+  again.report.notes = '元請と打合せ';
+  Core.saveReport(s, again.report, 200);
+  assert.equal(s.reports.length, 1);
+  assert.equal(Core.findReport(s, '2026-09-24', 's1').notes, '元請と打合せ');
+  assert.equal(Core.findReport(s, '2026-09-24', 's1').createdAt, 100);
+  assert.equal(Core.findReport(s, '2026-09-24', 's1').updatedAt, 200);
+});
+
+test('日報: 入力チェック（入力者・作業・協力会社名・完工現場）', () => {
+  const s = reportState();
+  const r = Core.draftReport(s, '2026-09-24', 's1').report;
+  let errs = Core.validateReport(s, r, { requireInputBy: true });
+  assert.ok(errs.some((e) => /入力者/.test(e)));
+  assert.ok(errs.some((e) => /今日の作業/.test(e)));
+  r.notes = '雨天のため作業中止'; // 作業がない日は特記事項があれば保存できる
+  r.inputBy = 'emp1';
+  assert.deepEqual(Core.validateReport(s, r, { requireInputBy: true }), []);
+  r.crew.subs = [{ name: '', people: 2 }];
+  assert.ok(Core.validateReport(s, r).some((e) => /協力会社の名前/.test(e)));
+  r.crew.subs = [];
+  s.sites[0].status = 'done';
+  assert.ok(Core.validateReport(s, r).some((e) => /完工/.test(e)));
+  assert.equal(Core.saveReport(s, r).report, null);
+  assert.equal(s.reports.length, 0);
+});
+
+test('日報の下書き: 前回の「明日の予定」＋途中・未着手の持ち越し、出面は前回と同じ', () => {
+  const s = reportState();
+  s.reports.push(Core.normalizeReport({
+    date: '2026-09-24', siteId: 's1',
+    crew: { own: 3, subs: [{ name: '△△電設', people: 1 }] },
+    tasks: [
+      { place: '2F 西側', work: '配管', status: 'done' },
+      { place: '3F', work: '分電盤 据付', status: 'partial', memo: '1面残り' },
+      { place: '1F', work: 'ボックス取付', status: 'notyet' },
+    ],
+    tomorrow: [
+      { place: '3F', work: '分電盤 据付' },   // 途中の作業と同じ → 重複させない
+      { place: '3F', work: '盤内結線', workTypeId: 'w3' },
+    ],
+  }));
+  // 別の現場・古い日報は影響しない
+  s.reports.push(Core.normalizeReport({ date: '2026-09-20', siteId: 's1', tomorrow: [{ work: '古い予定' }] }));
+  s.reports.push(Core.normalizeReport({ date: '2026-09-24', siteId: 's2', tomorrow: [{ work: '他現場' }] }));
+
+  const d = Core.draftReport(s, '2026-09-26', 's1'); // 間に休日があっても直近の日報から
+  assert.equal(d.saved, false);
+  assert.equal(d.fromDate, '2026-09-24');
+  assert.deepEqual(d.report.tasks.map((t) => [t.place, t.work, t.status]), [
+    ['3F', '分電盤 据付', 'notyet'],
+    ['3F', '盤内結線', 'notyet'],
+    ['1F', 'ボックス取付', 'notyet'],
+  ]);
+  assert.equal(d.report.tasks[1].workTypeId, 'w3');
+  assert.deepEqual(d.report.crew, { own: 3, subs: [{ name: '△△電設', people: 1 }] });
+  assert.equal(d.report.weather, '');
+  // 最初の日報は空
+  assert.equal(Core.draftReport(s, '2026-09-01', 's1').fromDate, null);
+});
+
+test('syncCarryOver: 途中・未着手は明日の予定へ自動で入れ、完了にしたら外す（手書きの予定は残す）', () => {
+  const r = Core.normalizeReport({
+    tasks: [
+      { id: 'a', place: '2F', work: '配管', status: 'partial' },
+      { id: 'b', place: '3F', work: '盤', status: 'done' },
+      { id: 'c', place: '', work: '', status: 'notyet' }, // 空行は入れない
+    ],
+    tomorrow: [{ id: 'm', place: '1F', work: '器具搬入' }],
+  });
+  Core.syncCarryOver(r);
+  assert.deepEqual(r.tomorrow.map((p) => [p.place, p.work, p.fromTaskId]), [['1F', '器具搬入', ''], ['2F', '配管', 'a']]);
+  // 作業の内容を直すと自動の予定も追従
+  r.tasks[0].place = '2F 西側';
+  Core.syncCarryOver(r);
+  assert.equal(r.tomorrow[1].place, '2F 西側');
+  // 完了にしたら外れる
+  r.tasks[0].status = 'done';
+  Core.syncCarryOver(r);
+  assert.deepEqual(r.tomorrow.map((p) => p.work), ['器具搬入']);
+  // 手書きの予定と同じ作業は二重に入れない
+  r.tasks.push({ id: 'd', place: '1F', work: '器具搬入', workTypeId: '', status: 'notyet', memo: '' });
+  Core.syncCarryOver(r);
+  assert.equal(r.tomorrow.length, 1);
+});
+
+test('予定・提出状況・協力会社の候補', () => {
+  const s = reportState();
+  s.events = [
+    { id: 'e1', siteId: 's1', date: '2026-09-30', title: '検査' },
+    { id: 'e2', siteId: 's1', date: '2026-09-20', title: '過去' },
+    { id: 'e3', siteId: 's1', date: '2026-09-26', title: '搬入' },
+    { id: 'e4', siteId: 's2', date: '2026-09-27', title: '他現場' },
+  ];
+  assert.deepEqual(Core.upcomingEvents(s, 's1', '2026-09-25').map((e) => e.title), ['搬入', '検査']);
+  s.reports.push(Core.normalizeReport({ date: '2026-09-24', siteId: 's1', crew: { own: 1, subs: [{ name: '○○電工', people: 1 }] } }));
+  s.reports.push(Core.normalizeReport({ date: '2026-09-25', siteId: 's1', crew: { own: 1, subs: [{ name: '△△電設', people: 2 }] } }));
+  s.reports.push(Core.normalizeReport({ date: '2026-09-25', siteId: 's2' }));
+  const sub = Core.reportSubmission(s, ['2026-09-24', '2026-09-25']);
+  assert.deepEqual([...sub.get('s1')].sort(), ['2026-09-24', '2026-09-25']);
+  assert.deepEqual([...sub.get('s2')], ['2026-09-25']);
+  assert.deepEqual(Core.subcontractorNames(s), ['○○電工', '△△電設'].sort((a, b) => a.localeCompare(b, 'ja')));
+  assert.deepEqual(Core.reportsOfSite(s, 's1').map((r) => r.date), ['2026-09-25', '2026-09-24']);
+});
+
+test('サンプル: 日報の「明日の予定」が翌営業日の下書きになる', () => {
+  const s = Core.emptyState();
+  const { sites } = Core.addSampleData(s, '2026-09-25');
+  const reps = Core.reportsOfSite(s, sites[0].id);
+  assert.equal(reps.length, 10);
+  assert.ok(sites[0].notebook && sites[0].notebook.contacts);
+  assert.ok(Core.upcomingEvents(s, sites[0].id, '2026-09-25').length >= 2);
+  // 9/24 の明日の予定 = 9/25 の作業
+  const d24 = reps.find((r) => r.date === '2026-09-24');
+  const d25 = reps.find((r) => r.date === '2026-09-25');
+  assert.deepEqual(d24.tomorrow.map((p) => p.work), d25.tasks.map((t) => t.work));
+  // 出面の合計は工数（延べ人工）以上
+  for (const r of reps) {
+    const md = Core.dayEntries(s, r.date, r.siteId).reduce((sum, e) => sum + Core.entryManHours(e), 0) / 8;
+    assert.ok(Core.crewTotal(r) >= md, r.date);
+  }
+});
+
+test('normalizeState: 日報・予定を読み込む（旧データにはなくても空で補う）', () => {
+  const s = Core.normalizeState({ reports: [{ date: '2026-09-25', siteId: 's1', tasks: [{ work: '配管' }] }] });
+  assert.equal(s.reports[0].tasks[0].status, 'notyet');
+  assert.deepEqual(s.reports[0].crew, { own: 0, subs: [] });
+  assert.deepEqual(Core.normalizeState({}).events, []);
+});

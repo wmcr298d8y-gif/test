@@ -57,6 +57,8 @@
       siteKinds: DEFAULT_SITE_KINDS.map((name) => ({ id: newId(), name })),
       employees: [],
       entries: [],
+      reports: [],
+      events: [],
       settings: { ...DEFAULT_SETTINGS },
     };
     mergeDefaultTaxonomy(state);
@@ -374,6 +376,197 @@
     return rows.sort((a, b) => b.manHours - a.manHours);
   }
 
+  // ---------- 日報 ----------
+  // 1 日・1 現場で 1 件。代わりの人が読んでも「今日は何をどこまでやるか」が分かることを目的にする。
+  // 今日の作業は前日の「明日の予定」から下書きし、途中・未着手の作業は翌日の予定へ持ち越す。
+
+  const WEATHERS = ['晴', '曇', '雨', '雪'];
+  const TASK_STATUS = { done: '完了', partial: '途中', notyet: '未着手' };
+
+  /** 現場ノートの項目（現場ごとに 1 枚。代わりの人が最初に読む情報） */
+  const NOTEBOOK_FIELDS = [
+    ['contacts', '元請の担当者・連絡先'],
+    ['hours', '朝礼・作業時間'],
+    ['rules', '入退場・作業のルール'],
+    ['places', '鍵・資材置き場・図面の場所'],
+    ['cautions', '注意点'],
+    ['other', 'その他'],
+  ];
+
+  function normalizeTask(t) {
+    return { id: t.id || newId(), place: t.place || '', work: t.work || '', workTypeId: t.workTypeId || '', status: t.status || 'notyet', memo: t.memo || '' };
+  }
+
+  function normalizePlan(p) {
+    return { id: p.id || newId(), place: p.place || '', work: p.work || '', workTypeId: p.workTypeId || '', fromTaskId: p.fromTaskId || '' };
+  }
+
+  function normalizeReport(r) {
+    return {
+      id: r.id || newId(),
+      date: r.date || '',
+      siteId: r.siteId || '',
+      inputBy: r.inputBy || '',
+      weather: r.weather || '',
+      crew: {
+        own: Number((r.crew && r.crew.own) || 0),
+        subs: ((r.crew && r.crew.subs) || []).map((x) => ({ name: x.name || '', people: Number(x.people) || 0 })),
+      },
+      tasks: (r.tasks || []).map(normalizeTask),
+      tomorrow: (r.tomorrow || []).map(normalizePlan),
+      notes: r.notes || '',
+      photos: r.photos || [],
+      createdAt: r.createdAt || 0,
+      updatedAt: r.updatedAt || 0,
+    };
+  }
+
+  function findReport(state, date, siteId) {
+    return state.reports.find((r) => r.date === date && r.siteId === siteId) || null;
+  }
+
+  /** 現場の日報（新しい順） */
+  function reportsOfSite(state, siteId) {
+    return state.reports.filter((r) => r.siteId === siteId).sort((a, b) => b.date.localeCompare(a.date));
+  }
+
+  function previousReport(state, siteId, beforeDate) {
+    return reportsOfSite(state, siteId).find((r) => r.date < beforeDate) || null;
+  }
+
+  /** 同じ作業かどうかの判定に使うキー（場所＋作業） */
+  function itemKey(x) {
+    return `${String(x.place || '').trim()}|${String(x.work || '').trim()}`;
+  }
+
+  /** 出面の合計人数 */
+  function crewTotal(report) {
+    if (!report) return 0;
+    return (Number(report.crew.own) || 0) + report.crew.subs.reduce((sum, x) => sum + (Number(x.people) || 0), 0);
+  }
+
+  /** 空欄の作業・予定・協力会社の行を除いた日報 */
+  function cleanReport(report) {
+    const filled = (x) => String(x.place || '').trim() || String(x.work || '').trim();
+    return {
+      ...report,
+      tasks: report.tasks.filter(filled).map((t) => ({ ...t, place: t.place.trim(), work: t.work.trim(), memo: t.memo.trim() })),
+      tomorrow: report.tomorrow.filter(filled).map((p) => ({ ...p, place: p.place.trim(), work: p.work.trim() })),
+      crew: { own: Number(report.crew.own) || 0, subs: report.crew.subs.filter((x) => String(x.name).trim() || Number(x.people)).map((x) => ({ name: String(x.name).trim(), people: Number(x.people) || 0 })) },
+      notes: String(report.notes || '').trim(),
+    };
+  }
+
+  /**
+   * 日報の下書き。保存済みならその内容、なければ同じ現場の直近の日報から作る。
+   *   今日の作業 = 前回の「明日の予定」（状態は未着手）＋ 前回「途中・未着手」で予定に入っていなかった作業（持ち越し）
+   *   出面 = 前回と同じ人数（変わっていれば直してもらう）
+   * 戻り値: { report, saved: 保存済みか, fromDate: 下書きの元にした日報の日付 }
+   */
+  function draftReport(state, date, siteId) {
+    const saved = findReport(state, date, siteId);
+    if (saved) return { report: normalizeReport(JSON.parse(JSON.stringify(saved))), saved: true, fromDate: null };
+    const prev = previousReport(state, siteId, date);
+    const report = normalizeReport({ date, siteId });
+    if (!prev) return { report, saved: false, fromDate: null };
+    const seen = new Set();
+    const tasks = [];
+    for (const p of prev.tomorrow) {
+      const key = itemKey(p);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      tasks.push(normalizeTask({ place: p.place, work: p.work, workTypeId: p.workTypeId }));
+    }
+    for (const t of prev.tasks) {
+      if (t.status === 'done' || seen.has(itemKey(t))) continue;
+      seen.add(itemKey(t));
+      tasks.push(normalizeTask({ place: t.place, work: t.work, workTypeId: t.workTypeId, memo: t.memo }));
+    }
+    report.tasks = tasks;
+    report.crew = { own: prev.crew.own, subs: prev.crew.subs.map((x) => ({ ...x })) };
+    return { report, saved: false, fromDate: prev.date };
+  }
+
+  /**
+   * 途中・未着手の作業を「明日の予定」に自動で入れる（すでに同じ作業があれば入れない）。
+   * 完了にした作業から自動で入れた予定は外す。手で書いた予定には触れない。
+   */
+  function syncCarryOver(report) {
+    const byTask = new Map(report.tasks.map((t) => [t.id, t]));
+    // 完了になった・消えた作業から自動で入れた予定を外す
+    report.tomorrow = report.tomorrow.filter((p) => {
+      if (!p.fromTaskId) return true;
+      const t = byTask.get(p.fromTaskId);
+      return t && t.status !== 'done';
+    });
+    const keys = new Set(report.tomorrow.map(itemKey));
+    for (const t of report.tasks) {
+      if (t.status === 'done' || !(t.place.trim() || t.work.trim())) continue;
+      const linked = report.tomorrow.find((p) => p.fromTaskId === t.id);
+      if (linked) {
+        // 作業の内容を直したら、自動で入れた予定も合わせる
+        Object.assign(linked, { place: t.place, work: t.work, workTypeId: t.workTypeId });
+        continue;
+      }
+      if (keys.has(itemKey(t))) continue;
+      report.tomorrow.push(normalizePlan({ place: t.place, work: t.work, workTypeId: t.workTypeId, fromTaskId: t.id }));
+      keys.add(itemKey(t));
+    }
+    return report;
+  }
+
+  function validateReport(state, report, { requireInputBy = false } = {}) {
+    const errors = [];
+    if (requireInputBy && !report.inputBy) errors.push('入力者を選択してください');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(report.date || '')) errors.push('日付を入力してください');
+    if (!report.siteId) errors.push('現場を選択してください');
+    if (isSiteDone(state, report.siteId)) errors.push('完工済みの現場のため保存できません（管理者が完工を解除すると入力できます）');
+    const r = cleanReport(report);
+    if (!r.tasks.length && !r.notes) errors.push('今日の作業を 1 つ以上入力してください（作業がない日は特記事項に理由を書いてください）');
+    if (r.crew.own < 0 || r.crew.subs.some((x) => x.people < 0)) errors.push('出面の人数は 0 以上にしてください');
+    if (r.crew.subs.some((x) => !x.name)) errors.push('協力会社の名前を入力してください');
+    return errors;
+  }
+
+  /** 日報を保存する（同じ日・現場の日報は置き換え）。戻り値: { errors, report } */
+  function saveReport(state, report, now = Date.now(), opts = {}) {
+    const errors = validateReport(state, report, opts);
+    if (errors.length) return { errors, report: null };
+    const clean = normalizeReport(cleanReport(report));
+    const prev = findReport(state, clean.date, clean.siteId);
+    clean.id = prev ? prev.id : clean.id;
+    clean.createdAt = prev ? prev.createdAt : now;
+    clean.updatedAt = now;
+    state.reports = state.reports.filter((r) => r !== prev).concat(clean);
+    return { errors: [], report: clean };
+  }
+
+  /** 指定日以降の予定（検査・打合せ・搬入など）。古い順 */
+  function upcomingEvents(state, siteId, fromDate) {
+    return state.events.filter((e) => e.siteId === siteId && e.date >= fromDate)
+      .sort((a, b) => a.date.localeCompare(b.date) || String(a.title).localeCompare(String(b.title)));
+  }
+
+  /** 日付ごとの日報の提出状況: Map(siteId → Set(date)) */
+  function reportSubmission(state, dates) {
+    const want = new Set(dates);
+    const map = new Map();
+    for (const r of state.reports) {
+      if (!want.has(r.date)) continue;
+      const set = map.get(r.siteId) || new Set();
+      set.add(r.date);
+      map.set(r.siteId, set);
+    }
+    return map;
+  }
+
+  /** 協力会社名の入力候補（これまでの日報に出てきた名前） */
+  function subcontractorNames(state) {
+    const names = new Set();
+    for (const r of state.reports) for (const x of r.crew.subs) if (x.name) names.add(x.name);
+    return [...names].sort((a, b) => a.localeCompare(b, 'ja'));
+  }
+
   // ---------- 自社の実績歩掛り（積算用） ----------
 
   /**
@@ -617,6 +810,8 @@
       workTypes: [],
       siteKinds: Array.isArray(raw.siteKinds) ? raw.siteKinds : DEFAULT_SITE_KINDS.map((name) => ({ id: newId(), name })),
       employees: Array.isArray(raw.employees) ? raw.employees : [],
+      reports: Array.isArray(raw.reports) ? raw.reports.map(normalizeReport) : [],
+      events: Array.isArray(raw.events) ? raw.events : [],
       entries: Array.isArray(raw.entries) ? raw.entries : [],
       settings: { ...DEFAULT_SETTINGS, ...(raw.settings || {}) },
     };
@@ -717,9 +912,13 @@
       [sites[2], doneC, employees[2], 0.05],
       [sites[3], doneD, employees[1], -0.05],
     ];
+    const places = ['1F 東側', '1F 西側', '2F 東側', '2F 西側', '3F', '屋上', 'EPS'];
     for (const [site, days, emp, bias] of plan) {
+      const dayItems = [];
       days.forEach((date, i) => {
         const phase = phases[Math.min(phases.length - 1, Math.floor((i / days.length) * phases.length))];
+        const items = [];
+        dayItems.push({ date, items });
         [...new Set([pick(phase), pick(phase)])].forEach((name, order) => {
           const people = 1 + Math.floor(rand() * 3);
           const hours = pick([8, 8, 8, 6, 4, 3.5]);
@@ -735,14 +934,60 @@
             quantity: rand() < 0.12 ? '' : quantity,
             hard, note: hard ? '高所作業' : '', inputBy: emp.id, order, createdAt: Date.now() + n++,
           });
+          items.push({ place: pick(places), work: name, workTypeId: wt(name).id, people });
         });
       });
+      // 日報: 今日の作業は工数と同じ内容、明日の予定は翌営業日の作業
+      dayItems.forEach(({ date, items }, i) => {
+        const next = dayItems[i + 1];
+        const total = items.reduce((sum, x) => sum + x.people, 0);
+        const subs = total >= 3 && rand() < 0.4 ? [{ name: '△△電設', people: 1 }] : [];
+        const tasks = items.map((x) => normalizeTask({
+          place: x.place, work: x.work, workTypeId: x.workTypeId,
+          status: next && rand() < 0.25 ? 'partial' : 'done',
+        }));
+        tasks.filter((t) => t.status === 'partial').forEach((t) => { t.memo = '残り約半分'; });
+        const tomorrow = (next ? next.items : [{ place: '3F', work: '照明器具取付', workTypeId: (wt('照明器具取付') || {}).id || '' }])
+          .map((x) => normalizePlan({ place: x.place, work: x.work, workTypeId: x.workTypeId }));
+        state.reports.push(normalizeReport({
+          date, siteId: site.id, inputBy: emp.id, weather: pick(['晴', '晴', '曇', '雨']),
+          crew: { own: total - subs.reduce((sum, x) => sum + x.people, 0), subs },
+          tasks, tomorrow,
+          notes: rand() < 0.2 ? '元請と打合せ。天井内の検査日程を確認。' : '',
+          createdAt: Date.now() + n++,
+        }));
+      });
     }
+
+    // 現場ノートと予定（稼働中の現場）
+    sites[0].notebook = {
+      contacts: '元請 ○○建設 現場代理人 佐藤様 090-0000-0000（サンプル）',
+      hours: '朝礼 8:00（1F 詰所前）。作業は 8:30〜17:00',
+      rules: '入館証を守衛室で受け取り、退館時に返却。病棟側は 9:00〜11:00 騒音作業禁止',
+      places: '鍵: 詰所のキーボックス（番号は代理人に確認）。資材: B1 倉庫。図面: 詰所の棚',
+      cautions: '稼働中の病院のため、通路に資材を置かない。3F 手術室系統は停電作業禁止',
+      other: '',
+    };
+    sites[1].notebook = {
+      contacts: '元請 △△工務店 工事主任 田中様 080-0000-0000（サンプル）',
+      hours: '朝礼 7:50（ゲート前）',
+      rules: '新規入場時は送り出し教育の書類が必要',
+      places: '資材: 1F 東側の仮置き場。図面: 詰所',
+      cautions: '', other: '',
+    };
+    const ahead = (days) => { const d = new Date(todayIso + 'T00:00:00'); d.setDate(d.getDate() + days); return isoLocal(d); };
+    state.events.push(
+      { id: newId(), siteId: sites[0].id, date: ahead(3), title: '天井内配線の検査（元請立会い）' },
+      { id: newId(), siteId: sites[0].id, date: ahead(7), title: '照明器具 搬入（10:00 着）' },
+      { id: newId(), siteId: sites[1].id, date: ahead(2), title: '分電盤 搬入' },
+    );
     return { sites, employees };
   }
 
   const Core = {
     addSampleData, isEmptyRow, isSiteDone, dayEntries, saveDaySheet, previousDayRows,
+    WEATHERS, TASK_STATUS, NOTEBOOK_FIELDS, normalizeReport, findReport, reportsOfSite, previousReport,
+    draftReport, syncCarryOver, validateReport, saveReport, crewTotal, upcomingEvents, reportSubmission, subcontractorNames,
     monthlyMatrix, siteDateRange, siteLabel, normalizeSite,
     DEFAULT_TAXONOMY, DEFAULT_SITE_KINDS, UNCATEGORIZED, emptyState,
     companyRates, companyRatesToCsv, mergeDefaultTaxonomy, defaultUnit,
