@@ -745,7 +745,7 @@
   }
 
   function newTask() {
-    return { id: Core.newId(), place: '', work: '', workTypeId: '', status: 'done', memo: '' };
+    return { id: Core.newId(), place: '', work: '', workTypeId: '', status: 'done', memo: '', photos: [], prevMemo: '', prevPhotos: [] };
   }
 
   function newPlan() {
@@ -766,22 +766,37 @@
 
   function taskHtml(t, i) {
     const id = (f) => `task-${t.id}-${f}`;
+    t.photos = t.photos || [];
+    t.prevPhotos = t.prevPhotos || [];
     return `<div class="task status-${t.status || 'none'}" data-task="${escapeHtml(t.id)}">
       <div class="task-head">
         <div class="task-status" role="group" aria-label="作業 ${i + 1} の状態">
           ${TASK_STATUS_ORDER.map((st) => `<button type="button" data-status="${st}" aria-pressed="${t.status === st}">${Core.TASK_STATUS[st]}</button>`).join('')}
         </div>
+        <label class="button task-photo-btn" for="${id('photo')}" aria-label="作業 ${i + 1} に写真を追加">写真
+          <input type="file" id="${id('photo')}" data-task-photo accept="image/*" multiple hidden>
+        </label>
         <button type="button" class="task-del danger" data-del-task aria-label="作業 ${i + 1} を削除">削除</button>
       </div>
       ${t.status ? '' : '<p class="task-hint">完了か途中を選んでください（手を付けられなかった作業も「途中」）</p>'}
-      ${t.prevMemo ? `<p class="task-prev">前回: ${escapeHtml(t.prevMemo)}</p>` : ''}
+      ${t.prevMemo || t.prevPhotos.length ? `<div class="task-prev">前回: ${escapeHtml(t.prevMemo || '（写真のみ）')}
+        ${t.prevPhotos.length ? `<div class="thumbs">${t.prevPhotos.map((ph) => thumbHtml(ph)).join('')}</div>` : ''}</div>` : ''}
       <div class="task-fields">
         <input id="${id('place')}" data-tf="place" type="text" value="${escapeHtml(t.place)}" placeholder="場所（例: 2F 西側）" aria-label="作業 ${i + 1} の場所">
         <input id="${id('work')}" data-tf="work" type="text" value="${escapeHtml(t.work)}" placeholder="作業（例: 天井内配管）" aria-label="作業 ${i + 1} の内容">
       </div>
       <input id="${id('memo')}" class="task-memo" data-tf="memo" type="text" value="${escapeHtml(t.memo)}"
         placeholder="${memoPlaceholder(t.status)}" aria-label="作業 ${i + 1} の備考">
+      ${t.photos.length ? `<div class="thumbs">${t.photos.map((ph, j) => thumbHtml(ph, `data-del-task-photo="${j}"`, `作業 ${i + 1} の写真 ${j + 1}`)).join('')}</div>` : ''}
     </div>`;
+  }
+
+  /** 写真の小さな表示（タップで拡大）。delAttr を渡すと削除ボタンを付ける */
+  function thumbHtml(ph, delAttr = '', label = '写真') {
+    return `<figure class="thumb">
+      <img src="${escapeHtml(ph.dataUrl)}" alt="${escapeHtml(ph.caption || label)}" data-zoom>
+      ${delAttr ? `<button type="button" class="task-del danger" ${delAttr} aria-label="${escapeHtml(label)}を削除">×</button>` : ''}
+    </figure>`;
   }
 
   function planHtml(p, i) {
@@ -832,7 +847,10 @@
     $('#rp-tasks').innerHTML = d.tasks.map(taskHtml).join('');
     $('#rp-plans').innerHTML = d.tomorrow.map(planHtml).join('');
     $('#rp-notes').value = d.notes;
+    $('#rp-reflection').value = d.reflection;
     renderPhotos();
+    renderReplies();
+    renderReplyNotice();
     $('#sub-names').innerHTML = Core.subcontractorNames(state).map((n) => `<option value="${escapeHtml(n)}">`).join('');
     updateReportStatus();
   }
@@ -921,6 +939,13 @@
   $('#rp-tasks').addEventListener('click', (ev) => {
     const t = taskOf(ev.target);
     if (!t) return;
+    const delPhoto = ev.target.closest('[data-del-task-photo]');
+    if (delPhoto) {
+      t.photos.splice(Number(delPhoto.dataset.delTaskPhoto), 1);
+      rerenderTask(t);
+      markReportDirty();
+      return;
+    }
     const st = ev.target.closest('[data-status]');
     if (st) {
       t.status = st.dataset.status;
@@ -952,13 +977,39 @@
     markReportDirty();
   });
   // 場所・作業の入力を終えたら持ち越しの予定に反映（入力のたびに予定欄を描き直さない）
-  $('#rp-tasks').addEventListener('change', (ev) => {
-    if (!taskOf(ev.target)) return;
+  $('#rp-tasks').addEventListener('change', async (ev) => {
     const t = taskOf(ev.target);
+    if (!t) return;
+    // 作業の写真
+    if (ev.target.matches('[data-task-photo]')) {
+      const files = [...ev.target.files];
+      ev.target.value = '';
+      for (const f of files) {
+        if (t.photos.length >= MAX_TASK_PHOTOS) { toast(`写真は 1 作業 ${MAX_TASK_PHOTOS} 枚までです`); break; }
+        try {
+          t.photos.push({ id: Core.newId(), dataUrl: await resizeImage(f) });
+        } catch (e) {
+          toast(e.message);
+        }
+      }
+      rerenderTask(t);
+      markReportDirty();
+      return;
+    }
+    if (!ev.target.dataset.tf) return;
     t[ev.target.dataset.tf] = ev.target.value;
     refreshPlans();
     markReportDirty();
   });
+
+  const MAX_TASK_PHOTOS = 2;
+
+  /** 1 件の作業だけ描き直す（ほかの作業の入力中の内容・フォーカスを保つ） */
+  function rerenderTask(t) {
+    const i = report.data.tasks.indexOf(t);
+    const box = $(`[data-task="${t.id}"]`);
+    if (box && i >= 0) box.outerHTML = taskHtml(t, i);
+  }
   $('#rp-add-task').addEventListener('click', () => {
     const t = newTask();
     report.data.tasks.push(t);
@@ -999,6 +1050,69 @@
   });
 
   $('#rp-notes').addEventListener('input', (ev) => { report.data.notes = ev.target.value; markReportDirty(); });
+  $('#rp-reflection').addEventListener('input', (ev) => { report.data.reflection = ev.target.value; markReportDirty(); });
+
+  // ---------- 返信（本番は kintone のレコードのコメント機能を使う想定） ----------
+  function formatDateTime(ms) {
+    return new Date(ms).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+
+  function replyAuthor() {
+    const emp = state.employees.find((x) => x.id === form.elements.inputBy.value);
+    return emp ? `${emp.name}（管理者）` : '管理者';
+  }
+
+  /** 返信の欄。現場用は返信を読むだけ、管理者用は返信を書ける。読んだ返信の数を端末に記録する */
+  function renderReplies() {
+    const saved = Core.findReport(state, report.data.date, report.data.siteId);
+    const replies = saved ? saved.replies : [];
+    const admin = role() === 'admin';
+    const box = $('#rp-replies');
+    box.hidden = !saved || (!replies.length && !admin);
+    if (box.hidden) return;
+    box.innerHTML = `<h2>管理者からの返信</h2>
+      ${replies.length ? `<ul class="reply-list">${replies.map((x) => `<li>
+          <div class="reply-meta"><strong>${escapeHtml(x.author)}</strong> <span class="muted small">${formatDateTime(x.at)}</span></div>
+          <p class="pre">${escapeHtml(x.text)}</p></li>`).join('')}</ul>` : '<p class="muted small">まだ返信はありません。</p>'}
+      ${admin ? `<div class="reply-form">
+          <label for="rp-reply-text" class="visually-hidden">返信</label>
+          <textarea id="rp-reply-text" rows="2" placeholder="日報・ふりかえりへの返信（本番は kintone のコメント機能を使う想定）"></textarea>
+          <button type="button" class="primary" id="rp-reply-send">返信する</button>
+        </div>` : ''}`;
+    if (!admin && replies.length) {
+      const seen = state.settings.seenReplies || {};
+      if ((seen[saved.id] || 0) < replies.length) {
+        state.settings.seenReplies = { ...seen, [saved.id]: replies.length };
+        save();
+      }
+    }
+  }
+
+  /** 現場用: まだ読んでいない返信がある日報のお知らせ */
+  function renderReplyNotice() {
+    const box = $('#rp-reply-notice');
+    const list = role() === 'admin' || !report.data.siteId ? []
+      : Core.unreadReplies(state, report.data.siteId, state.settings.seenReplies || {}).filter((r) => r.date !== report.data.date);
+    box.hidden = !list.length;
+    box.innerHTML = list.length ? `<strong>管理者から返信があります</strong> ` + list.slice(0, 5).map((r) =>
+      `<button type="button" class="chip" data-open-reply="${escapeHtml(r.date)}">${formatDate(r.date)} の日報</button>`).join('') : '';
+  }
+
+  $('#rp-reply-notice').addEventListener('click', async (ev) => {
+    const b = ev.target.closest('[data-open-reply]');
+    if (!b || !await confirmDiscard()) return;
+    loadContext(b.dataset.openReply, report.data.siteId);
+    $('#rp-replies').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+
+  $('#rp-replies').addEventListener('click', (ev) => {
+    if (!ev.target.closest('#rp-reply-send')) return;
+    const res = Core.addReply(state, report.data.date, report.data.siteId, $('#rp-reply-text').value, replyAuthor());
+    if (res.error) { toast(res.error); return; }
+    save();
+    renderReplies();
+    toast('返信しました');
+  });
 
   // 写真（任意）。端末の容量を圧迫しないよう、長辺 1280px の JPEG に縮小して保存する
   const MAX_PHOTOS = 4;
@@ -1048,6 +1162,12 @@
     report.data.photos[Number(i)].caption = ev.target.value;
     markReportDirty();
   });
+  // 作業の写真・前回の写真・履歴の写真はタップで拡大
+  document.addEventListener('click', (ev) => {
+    const img = ev.target.closest('.thumb img[data-zoom]');
+    if (img) img.closest('.thumb').classList.toggle('expanded');
+  });
+
   $('#rp-photos').addEventListener('click', (ev) => {
     const del = ev.target.closest('[data-del-photo]');
     if (del) {
@@ -1086,17 +1206,26 @@
     return state.sites.find((x) => x.id === sheet.siteId) || null;
   }
 
+  function photoCount(r) {
+    return r.photos.length + r.tasks.reduce((sum, t) => sum + t.photos.length, 0);
+  }
+
   function reportHtml(r, names) {
     const tasks = r.tasks.map((t) => `<li class="status-${t.status}">
-        <span class="pill st-${t.status}">${Core.TASK_STATUS[t.status]}</span>
-        ${escapeHtml([t.place, t.work].filter(Boolean).join(' '))}${t.memo ? `<span class="muted"> … ${escapeHtml(t.memo)}</span>` : ''}</li>`).join('');
+        <span class="pill st-${t.status}">${Core.TASK_STATUS[t.status] || '—'}</span>
+        <span>${escapeHtml([t.place, t.work].filter(Boolean).join(' '))}${t.memo ? `<span class="muted"> … ${escapeHtml(t.memo)}</span>` : ''}
+        ${t.photos.length ? `<span class="thumbs">${t.photos.map((ph) => thumbHtml(ph)).join('')}</span>` : ''}</span></li>`).join('');
+    // ふりかえりと返信は本人と管理者だけが見る（現場タブの履歴では管理者用のときだけ表示）
+    const admin = role() === 'admin';
     const plans = r.tomorrow.map((p) => `<li>${escapeHtml([p.place, p.work].filter(Boolean).join(' '))}</li>`).join('');
     const subs = r.crew.subs.map((x) => `${escapeHtml(x.name)} ${fmt(x.people)}人工`).join('、');
     return `<details class="report-card">
       <summary>
         <strong>${formatDate(r.date)}</strong>
         ${r.weather ? `<span class="pill kind">${escapeHtml(r.weather)}</span>` : ''}
-        <span class="muted">出面 ${fmt(Core.crewTotal(r))}人工・作業 ${r.tasks.length}${r.photos.length ? `・写真 ${r.photos.length}` : ''}</span>
+        <span class="muted">出面 ${fmt(Core.crewTotal(r))}人工・作業 ${r.tasks.length}${photoCount(r) ? `・写真 ${photoCount(r)}` : ''}</span>
+        ${role() === 'admin' && r.replies.length ? `<span class="pill active">返信 ${r.replies.length}</span>` : ''}
+        ${role() === 'admin' && r.reflection ? '<span class="pill kind">ふりかえり</span>' : ''}
         ${r.inputBy ? `<span class="muted small">入力 ${escapeHtml(names.employee(r.inputBy))}</span>` : ''}
       </summary>
       <div class="report-body">
@@ -1104,6 +1233,8 @@
         <h3>作業</h3><ul class="todo">${tasks || '<li class="muted">なし</li>'}</ul>
         <h3>翌日の予定</h3><ul class="todo">${plans || '<li class="muted">なし</li>'}</ul>
         ${r.notes ? `<h3>特記事項</h3><p class="pre">${escapeHtml(r.notes)}</p>` : ''}
+        ${admin && r.reflection ? `<h3>ふりかえり <span class="pill kind">本人と管理者のみ</span></h3><p class="pre">${escapeHtml(r.reflection)}</p>` : ''}
+        ${admin && r.replies.length ? `<h3>返信</h3><ul class="reply-list">${r.replies.map((x) => `<li><div class="reply-meta"><strong>${escapeHtml(x.author)}</strong> <span class="muted small">${formatDateTime(x.at)}</span></div><p class="pre">${escapeHtml(x.text)}</p></li>`).join('')}</ul>` : ''}
         ${r.photos.length ? `<div class="photos">${r.photos.map((ph) => `<figure class="photo"><img src="${escapeHtml(ph.dataUrl)}" alt="${escapeHtml(ph.caption || '現場写真')}">${ph.caption ? `<figcaption>${escapeHtml(ph.caption)}</figcaption>` : ''}</figure>`).join('')}</div>` : ''}
       </div>
     </details>`;

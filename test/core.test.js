@@ -655,3 +655,55 @@ test('validateReport: 状態を選んでいない作業があると保存でき�
   r.tasks[0].status = 'partial';
   assert.deepEqual(Core.validateReport(s, r), []);
 });
+
+test('作業ごとの写真: 保存でき、途中の作業の写真は翌日の下書きに「前回の写真」として出る（保存はしない）', () => {
+  const s = reportState();
+  const ph = { id: 'p1', dataUrl: 'data:image/jpeg;base64,xx' };
+  const r = Core.normalizeReport({
+    date: '2026-09-24', siteId: 's1',
+    tasks: [
+      { place: '3F', work: '照明器具取付', status: 'partial', memo: '20台のうち12台', photos: [ph] },
+      { place: '2F', work: '配管', status: 'done', photos: [{ id: 'p2', dataUrl: 'data:,y' }] },
+    ],
+    photos: [{ id: 'p3', dataUrl: 'data:,z', caption: '元請の指示図面' }],
+  });
+  Core.syncCarryOver(r);
+  assert.deepEqual(Core.saveReport(s, r).errors, []);
+  const saved = Core.findReport(s, '2026-09-24', 's1');
+  assert.equal(saved.tasks[0].photos.length, 1);
+  assert.equal(saved.photos[0].caption, '元請の指示図面');
+  const d = Core.draftReport(s, '2026-09-25', 's1');
+  assert.equal(d.report.tasks.length, 1); // 完了の作業は入らない
+  assert.deepEqual(d.report.tasks[0].prevPhotos, [ph]);
+  assert.deepEqual(d.report.tasks[0].photos, []); // 今日の写真は空から
+  // 下書きを保存しても前回の写真は残さない
+  d.report.tasks[0].status = 'done';
+  Core.saveReport(s, d.report);
+  const t = Core.findReport(s, '2026-09-25', 's1').tasks[0];
+  assert.deepEqual(t.prevPhotos, []);
+  assert.equal(t.prevMemo, '');
+});
+
+test('ふりかえり・返信: 日報を書き直しても返信は消えない。未読の返信を数える', () => {
+  const s = reportState();
+  const r = Core.normalizeReport({ date: '2026-09-24', siteId: 's1', tasks: [{ place: '2F', work: '配管', status: 'done' }], reflection: '  段取りが良かった  ' });
+  Core.saveReport(s, r, 100);
+  assert.equal(Core.findReport(s, '2026-09-24', 's1').reflection, '段取りが良かった');
+  assert.match(Core.addReply(s, '2026-09-30', 's1', 'x', '管理者').error, /保存済み/);
+  assert.match(Core.addReply(s, '2026-09-24', 's1', '  ', '管理者').error, /入力/);
+  const { reply } = Core.addReply(s, '2026-09-24', 's1', 'いい段取りでした。次も頼みます', '部長', 200);
+  assert.equal(reply.author, '部長');
+  // 現場が日報を書き直しても返信は残る
+  const again = Core.draftReport(s, '2026-09-24', 's1').report;
+  again.notes = '追記';
+  again.replies = [];
+  Core.saveReport(s, again, 300);
+  const saved = Core.findReport(s, '2026-09-24', 's1');
+  assert.equal(saved.replies.length, 1);
+  assert.equal(saved.replies[0].text, 'いい段取りでした。次も頼みます');
+  // 未読
+  assert.deepEqual(Core.unreadReplies(s, 's1', {}).map((x) => x.date), ['2026-09-24']);
+  assert.deepEqual(Core.unreadReplies(s, 's1', { [saved.id]: 1 }), []);
+  Core.addReply(s, '2026-09-24', 's1', '追加の返信', '管理者', 400);
+  assert.equal(Core.unreadReplies(s, 's1', { [saved.id]: 1 }).length, 1);
+});

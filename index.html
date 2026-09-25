@@ -63,6 +63,7 @@
     <!-- 日報（必須） -->
     <section id="tab-report" class="panel" role="tabpanel">
       <form id="report-form" novalidate>
+        <div class="reply-notice" id="rp-reply-notice" hidden></div>
         <p class="report-origin" id="rp-origin"></p>
         <p class="sheet-lock" id="rp-lock" hidden></p>
         <fieldset class="sheet-fields" id="rp-fields">
@@ -101,13 +102,22 @@
           </section>
 
           <section class="rp-block">
-            <h2>写真 <span class="optional">任意</span></h2>
+            <h2>その他の写真 <span class="optional">任意</span></h2>
+            <p class="muted small">作業の写真は、各作業の「写真」から付けてください。ここには元請の指示図面・危険箇所・資材など、作業に結び付かない写真を入れます。</p>
             <div class="photos" id="rp-photos"></div>
-            <label class="button" for="rp-photo-input">写真を追加（作業を終えた場所など）
+            <label class="button" for="rp-photo-input">写真を追加
               <input type="file" id="rp-photo-input" accept="image/*" multiple hidden>
             </label>
           </section>
+
+          <section class="rp-block">
+            <h2><label for="rp-reflection">ふりかえり</label> <span class="optional">任意</span></h2>
+            <p class="muted small">本人と管理者だけが見ます（現場タブの履歴には表示されません）。</p>
+            <textarea id="rp-reflection" rows="3" placeholder="良かった点・うまくいかなかった点・次に気をつけること"></textarea>
+          </section>
         </fieldset>
+
+        <section class="rp-block replies" id="rp-replies" hidden></section>
         <ul class="errors" id="rp-errors"></ul>
 
         <div class="sheet-bar">

@@ -402,8 +402,13 @@
     // 旧バージョンの「未着手」「繰越」は「途中」として扱う
     const status = t.status === 'notyet' || t.status === 'carried' ? 'partial' : (t.status in TASK_STATUS ? t.status : '');
     // skipCarry: 途中でも明日の予定には入れない（利用者が予定から外した）
-    // prevMemo: 下書きで表示する前回の進み具合（参考表示のみで保存しない）
-    return { id: t.id || newId(), place: t.place || '', work: t.work || '', workTypeId: t.workTypeId || '', status, memo: t.memo || '', skipCarry: !!t.skipCarry, prevMemo: t.prevMemo || '' };
+    // photos: この作業の写真（「どこまで進んだか」を写真で残す）
+    // prevMemo / prevPhotos: 下書きで表示する前回の進み具合と写真（参考表示のみで保存しない）
+    return {
+      id: t.id || newId(), place: t.place || '', work: t.work || '', workTypeId: t.workTypeId || '', status,
+      memo: t.memo || '', photos: t.photos || [], skipCarry: !!t.skipCarry,
+      prevMemo: t.prevMemo || '', prevPhotos: t.prevPhotos || [],
+    };
   }
 
   /** 明日の予定。fromTaskId: 今日の途中の作業から自動で入れた予定（繰越）。carried は旧バージョンの項目 */
@@ -425,7 +430,12 @@
       tasks: (r.tasks || []).map(normalizeTask),
       tomorrow: (r.tomorrow || []).map(normalizePlan),
       notes: r.notes || '',
+      // その他の写真（作業に結び付かないもの: 元請の指示図面・危険箇所・資材など）
       photos: r.photos || [],
+      // ふりかえり（良かった点・うまくいかなかった点）。現場タブの履歴には出さず、本人と管理者だけが見る
+      reflection: r.reflection || '',
+      // 上司・管理者からの返信 [{ id, author, text, at }]
+      replies: (r.replies || []).map((x) => ({ id: x.id || newId(), author: x.author || '', text: x.text || '', at: x.at || 0 })),
       createdAt: r.createdAt || 0,
       updatedAt: r.updatedAt || 0,
     };
@@ -460,10 +470,11 @@
     const filled = (x) => String(x.place || '').trim() || String(x.work || '').trim();
     return {
       ...report,
-      tasks: report.tasks.filter(filled).map(({ prevMemo, ...t }) => ({ ...t, place: t.place.trim(), work: t.work.trim(), memo: t.memo.trim() })),
+      tasks: report.tasks.filter(filled).map(({ prevMemo, prevPhotos, ...t }) => ({ ...t, place: t.place.trim(), work: t.work.trim(), memo: t.memo.trim() })),
       tomorrow: report.tomorrow.filter(filled).map((p) => ({ ...p, place: p.place.trim(), work: p.work.trim() })),
       crew: { own: Number(report.crew.own) || 0, subs: report.crew.subs.filter((x) => String(x.name).trim() || Number(x.people)).map((x) => ({ name: String(x.name).trim(), people: Number(x.people) || 0 })) },
       notes: String(report.notes || '').trim(),
+      reflection: String(report.reflection || '').trim(),
     };
   }
 
@@ -481,18 +492,20 @@
     if (!prev) return { report, saved: false, fromDate: null };
     const seen = new Set();
     const tasks = [];
-    // 前回「途中」だった作業の進み具合・できなかった理由は、参考として下書きに表示する（入力欄には入れない）
-    const prevMemo = new Map(prev.tasks.filter((t) => t.status !== 'done' && t.memo).map((t) => [itemKey(t), t.memo]));
+    // 前回「途中」だった作業の進み具合・できなかった理由と写真は、参考として下書きに表示する（入力欄には入れない）
+    const unfinished = prev.tasks.filter((t) => t.status !== 'done');
+    const prevMemo = new Map(unfinished.filter((t) => t.memo).map((t) => [itemKey(t), t.memo]));
+    const prevPhotos = new Map(unfinished.filter((t) => t.photos.length).map((t) => [itemKey(t), t.photos]));
     for (const p of prev.tomorrow) {
       const key = itemKey(p);
       if (seen.has(key)) continue;
       seen.add(key);
-      tasks.push(normalizeTask({ place: p.place, work: p.work, workTypeId: p.workTypeId, status: '', prevMemo: prevMemo.get(key) }));
+      tasks.push(normalizeTask({ place: p.place, work: p.work, workTypeId: p.workTypeId, status: '', prevMemo: prevMemo.get(key), prevPhotos: prevPhotos.get(key) }));
     }
     for (const t of prev.tasks) {
       if (t.status === 'done' || seen.has(itemKey(t))) continue;
       seen.add(itemKey(t));
-      tasks.push(normalizeTask({ place: t.place, work: t.work, workTypeId: t.workTypeId, status: '', prevMemo: t.memo }));
+      tasks.push(normalizeTask({ place: t.place, work: t.work, workTypeId: t.workTypeId, status: '', prevMemo: t.memo, prevPhotos: t.photos }));
     }
     report.tasks = tasks;
     report.crew = { own: prev.crew.own, subs: prev.crew.subs.map((x) => ({ ...x })) };
@@ -549,9 +562,29 @@
     const prev = findReport(state, clean.date, clean.siteId);
     clean.id = prev ? prev.id : clean.id;
     clean.createdAt = prev ? prev.createdAt : now;
+    // 返信は日報の編集では変えない（書き直しても管理者の返信は消えない）
+    clean.replies = prev ? prev.replies : [];
     clean.updatedAt = now;
     state.reports = state.reports.filter((r) => r !== prev).concat(clean);
     return { errors: [], report: clean };
+  }
+
+  /** 保存済みの日報に返信を付ける。戻り値: { error, reply } */
+  function addReply(state, date, siteId, text, author, now = Date.now()) {
+    const rep = findReport(state, date, siteId);
+    if (!rep) return { error: '保存済みの日報にだけ返信できます', reply: null };
+    const body = String(text || '').trim();
+    if (!body) return { error: '返信を入力してください', reply: null };
+    const reply = { id: newId(), author: author || '管理者', text: body, at: now };
+    rep.replies.push(reply);
+    return { error: '', reply };
+  }
+
+  /**
+   * まだ読んでいない返信がある日報（新しい順）。seen は { 日報ID: 読んだ返信の数 }（端末ごとに保存）
+   */
+  function unreadReplies(state, siteId, seen = {}) {
+    return reportsOfSite(state, siteId).filter((r) => r.replies.length > (seen[r.id] || 0));
   }
 
   /** 指定日以降の予定（検査・打合せ・搬入など）。古い順 */
@@ -974,6 +1007,13 @@
       });
     }
 
+    // ふりかえりと管理者からの返信の例（A 現場の 2 日前の日報）
+    const aReports = reportsOfSite(state, sites[0].id);
+    if (aReports[2]) {
+      aReports[2].reflection = '午前中に資材を各階へ上げておいたので、午後の配管がスムーズに進んだ。3F は天井材が先行しているので明日は脚立の段取りを先に。';
+      aReports[2].replies.push({ id: newId(), author: '管理者', text: '段取りの工夫、良いですね。資材の先行搬入は B 現場にも共有します。', at: aReports[2].updatedAt + 3 * 3600 * 1000 });
+    }
+
     // 現場ノートと予定（稼働中の現場）
     sites[0].notebook = {
       contacts: '元請 ○○建設 現場代理人 佐藤様 090-0000-0000（サンプル）',
@@ -1002,7 +1042,7 @@
   const Core = {
     addSampleData, isEmptyRow, isSiteDone, dayEntries, saveDaySheet, previousDayRows,
     WEATHERS, TASK_STATUS, NOTEBOOK_FIELDS, normalizeReport, findReport, reportsOfSite, previousReport,
-    draftReport, syncCarryOver, validateReport, saveReport, crewTotal, upcomingEvents, reportSubmission, subcontractorNames,
+    draftReport, syncCarryOver, validateReport, addReply, unreadReplies, saveReport, crewTotal, upcomingEvents, reportSubmission, subcontractorNames,
     monthlyMatrix, siteDateRange, siteLabel, normalizeSite,
     DEFAULT_TAXONOMY, DEFAULT_SITE_KINDS, UNCATEGORIZED, emptyState,
     companyRates, companyRatesToCsv, mergeDefaultTaxonomy, defaultUnit,

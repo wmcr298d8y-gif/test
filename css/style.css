@@ -512,3 +512,29 @@ button.chip { min-height: 32px; }
 .event-form input[name=title] { flex: 1 1 12em; min-width: 0; }
 
 .task-prev { margin: 0; font-size: 0.8rem; color: var(--warn-text); background: var(--warn-bg); border-radius: 6px; padding: 2px 8px; }
+
+/* ---------- 作業の写真・ふりかえり・返信 ---------- */
+.task-head { flex-wrap: wrap; }
+.task-photo-btn { min-height: 30px; padding: 2px 10px; font-size: 0.8rem; margin-left: auto; }
+.task-photo-btn + .task-del { margin-left: 0; }
+.thumbs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.thumb { position: relative; margin: 0; }
+.thumb img { width: 72px; height: 54px; object-fit: cover; border-radius: 6px; cursor: zoom-in; display: block; }
+.thumb.expanded { flex-basis: 100%; }
+.thumb.expanded img { width: 100%; height: auto; cursor: zoom-out; }
+.thumb .task-del { position: absolute; top: 2px; right: 2px; min-height: 22px; padding: 0 6px; background: var(--surface); }
+.task-prev .thumbs { margin-top: 4px; }
+.todo li > span { display: flex; flex-direction: column; gap: 2px; }
+.todo .thumbs { flex-direction: row; }
+
+.reply-notice {
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+  margin-bottom: 12px; padding: 10px 12px; border-radius: var(--radius);
+  background: var(--accent-bg); color: var(--primary);
+}
+.replies h2 { margin: 0; }
+.reply-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.reply-list li { border-left: 3px solid var(--primary); padding: 4px 10px; background: var(--accent-bg); border-radius: 0 8px 8px 0; }
+.reply-list p { margin: 2px 0 0; }
+.reply-form { display: flex; flex-direction: column; gap: 6px; }
+.reply-form .primary { align-self: flex-end; }
