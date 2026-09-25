@@ -96,7 +96,7 @@ test('nameLookup: 大分類 › 小分類', () => {
   assert.equal(names.workType('nope'), '(削除済み)');
 });
 
-test('productivity: 歩掛り = 人工合計 ÷ 数量合計（数量未入力日の工数も含む）', () => {
+test('productivity: 歩掛 = 人工合計 ÷ 数量合計（数量未入力日の工数も含む）', () => {
   const workTypes = [
     { id: 'kan', categoryId: 'c1', name: '電線管敷設（露出）', unit: 'm' },
     { id: 'lan', categoryId: 'c2', name: 'LAN配線', unit: 'm' },
@@ -188,7 +188,7 @@ test('normalizeState: 壊れたデータでも既定値で補完', () => {
   assert.equal(t.categories.length, Core.DEFAULT_TAXONOMY.length);
 });
 
-test('normalizeState: 廃止した歩掛りマスタ・比較設定・元請紐づけを取り除き、工事区分を補う', () => {
+test('normalizeState: 廃止した歩掛マスタ・比較設定・元請紐づけを取り除き、工事区分を補う', () => {
   const s = Core.normalizeState({
     categories: [{ id: 'c1', name: '配管工事' }],
     workTypes: [{ id: 'a', categoryId: 'c1', name: '電線管敷設（露出）', unit: 'm', standardRate: 0.02 }],
@@ -247,7 +247,7 @@ test('companyRates: 稼働中を含める・工事区分・難度・期間で絞
   assert.equal(one({ kindId: 'k1' }).rate, 0.02);          // 新築の完工現場 = A のみ（C は数量なし）
   assert.equal(one({ kindId: 'k2' }).rate, 0.08);
   assert.equal(one({ difficulty: 'normal' }).rate, 0.027); // 難を除く: (2 + 2) / 150
-  // 難のみ: 対象は数量なしの日だけ → 数量を記録した現場がないので歩掛りは出ない
+  // 難のみ: 対象は数量なしの日だけ → 数量を記録した現場がないので歩掛は出ない
   assert.equal(one({ difficulty: 'hard' }).rate, null);
   assert.equal(one({ difficulty: 'hard' }).sitesNoQuantity, 1);
   assert.equal(one({ from: '2026-07-01', to: '2026-07-31' }).rate, 0.08);
@@ -258,7 +258,7 @@ test('companyRatesToCsv: 条件行と見出し・値', () => {
   const csv = Core.companyRatesToCsv(s, Core.companyRates(s), '完工現場のみ');
   const lines = csv.replace(/^﻿/, '').trim().split('\r\n');
   assert.equal(lines[0], '条件: 完工現場のみ');
-  assert.equal(lines[1], '大分類,小分類,単位,実績歩掛り(人工/単位),1人工あたり施工量,現場数,最小,最大,数量合計,人工合計,難の割合(%)');
+  assert.equal(lines[1], '大分類,小分類,単位,実績歩掛(人工/単位),1人工あたり施工量,現場数,最小,最大,数量合計,人工合計,難の割合(%)');
   assert.equal(lines[2], '配管工事,電線管敷設（露出）,m,0.04,25,2,0.02,0.08,150,6,33.33');
 });
 
@@ -275,7 +275,7 @@ test('saveDaySheet / previousDayRows: 難度を保存し、呼び出しでも引
   assert.deepEqual(dst.entries.map((e) => e.hard).sort(), [false, true]);
 });
 
-test('addSampleData: 稼働中 2・完工 2 現場、社員、工事区分、難度を追加し、自社実績歩掛りを出せる', () => {
+test('addSampleData: 稼働中 2・完工 2 現場、社員、工事区分、難度を追加し、自社実績歩掛を出せる', () => {
   const s = Core.emptyState();
   const { sites, employees } = Core.addSampleData(s, '2026-09-25');
   assert.equal(s.sites.length, 4);

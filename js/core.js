@@ -202,7 +202,7 @@
         people: Number(r.people),
         hours: Number(r.hours),
         quantity: isBlank(r.quantity) ? '' : Number(r.quantity),
-        // 難度が高い作業（高所・狭所など）。自社の実績歩掛りで標準と分けて集計する
+        // 難度が高い作業（高所・狭所など）。自社の実績歩掛で標準と分けて集計する
         hard: !!r.hard,
         note: String(r.note || '').trim(),
         inputBy: inputBy || (prev && prev.inputBy) || '',
@@ -326,8 +326,8 @@
   }
 
   /**
-   * 歩掛りを算出する（小分類ごと）。
-   * 期間内の 延べ人工 ÷ 数量合計 を「歩掛り（人工/単位）」とする。
+   * 歩掛を算出する（小分類ごと）。
+   * 期間内の 延べ人工 ÷ 数量合計 を「歩掛（人工/単位）」とする。
    * 数量を記録していない日の工数も、その工種の施工に要した手間として分子に含める。
    * bySite: true で 現場×小分類 ごとに集計する。
    * categories を渡すと大分類・小分類の登録順に並べる（省略時は工数の降順）。
@@ -613,14 +613,14 @@
     return [...names].sort((a, b) => a.localeCompare(b, 'ja'));
   }
 
-  // ---------- 自社の実績歩掛り（積算用） ----------
+  // ---------- 自社の実績歩掛（積算用） ----------
 
   /**
-   * 複数現場の記録から、小分類ごとの自社実績歩掛りを求める。
-   * 歩掛り = 人工合計 ÷ 数量合計（規模の大きい現場ほど重みが大きい加重平均）。
+   * 複数現場の記録から、小分類ごとの自社実績歩掛を求める。
+   * 歩掛 = 人工合計 ÷ 数量合計（規模の大きい現場ほど重みが大きい加重平均）。
    * その工種の数量を一度も記録していない現場は、手間だけが計上されて値が過大になるため計算から除き、
    * 件数（sitesNoQuantity）として返す。同じ現場の中で数量を入れていない日の工数は含める。
-   * 現場ごとの歩掛りから最小・最大も出し、ばらつきと現場数で信頼度を判断できるようにする。
+   * 現場ごとの歩掛から最小・最大も出し、ばらつきと現場数で信頼度を判断できるようにする。
    * options:
    *   doneOnly  完工済みの現場だけを対象にする（既定 true）
    *   kindId    工事区分で絞る
@@ -681,9 +681,9 @@
       idx(catIndex, a.categoryId) - idx(catIndex, b.categoryId) || idx(wtIndex, a.workTypeId) - idx(wtIndex, b.workTypeId));
   }
 
-  const COMPANY_RATE_CSV_HEADER = ['大分類', '小分類', '単位', '実績歩掛り(人工/単位)', '1人工あたり施工量', '現場数', '最小', '最大', '数量合計', '人工合計', '難の割合(%)'];
+  const COMPANY_RATE_CSV_HEADER = ['大分類', '小分類', '単位', '実績歩掛(人工/単位)', '1人工あたり施工量', '現場数', '最小', '最大', '数量合計', '人工合計', '難の割合(%)'];
 
-  /** 自社の実績歩掛りを CSV にする（積算の歩掛りマスタへの転記用）。condition は条件の説明（1 行目に出力） */
+  /** 自社の実績歩掛を CSV にする（積算の歩掛マスタへの転記用）。condition は条件の説明（1 行目に出力） */
   function companyRatesToCsv(state, rows, condition = '') {
     const names = nameLookup(state);
     const v = (x) => (x === null || x === undefined ? '' : x);
@@ -867,12 +867,12 @@
     }
     const catIds = new Set(state.categories.map((c) => c.id));
     state.workTypes = raw.workTypes.map((w) => {
-      // 旧バージョンの小分類ごとの標準歩掛り（standardRate）は廃止
+      // 旧バージョンの小分類ごとの標準歩掛（standardRate）は廃止
       const { standardRate, ...wt } = { unit: defaultUnit(w.name), ...w };
       if (!catIds.has(wt.categoryId)) wt.categoryId = findOrAddCategory(state, UNCATEGORIZED);
       return wt;
     });
-    // 廃止した設定（歩掛りマスタとの比較）を消す
+    // 廃止した設定（歩掛マスタとの比較）を消す
     delete state.settings.compareMasterIds;
     return state;
   }
@@ -914,7 +914,7 @@
   function addSampleData(state, todayIso) {
     mergeDefaultTaxonomy(state);
     const wt = (name) => state.workTypes.find((w) => w.name === name);
-    // 実績のばらつきの基準にする仮の歩掛り（人工/単位）
+    // 実績のばらつきの基準にする仮の歩掛（人工/単位）
     const baseRates = new Map([
       ['電線管敷設（露出）', 0.03], ['ボックス取付', 0.045], ['ケーブル配線（VVF等）', 0.014],
       ['幹線ケーブル敷設', 0.055], ['照明器具取付', 0.13], ['コンセント取付', 0.055],

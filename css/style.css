@@ -384,7 +384,7 @@ button.chip { min-height: 32px; }
 .segmented-mini button { min-height: 30px; padding: 2px 10px; border: 0; border-radius: 0; font-size: 0.8rem; }
 .segmented-mini button[aria-pressed="true"] { background: var(--primary); color: var(--primary-text); }
 
-/* ---------- 難度・工事区分・自社実績歩掛り ---------- */
+/* ---------- 難度・工事区分・自社実績歩掛 ---------- */
 .hard-toggle {
   display: inline-flex; align-items: center; gap: 4px; cursor: pointer;
   padding: 2px 10px; min-height: 30px; border: 1px solid var(--border); border-radius: 999px;

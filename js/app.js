@@ -1519,7 +1519,7 @@
     $('#c-table').innerHTML = `<table class="rates cumul">
       <thead><tr>
         <th>工種</th><th class="num">数量</th><th class="num">人工</th>
-        <th class="num">実績歩掛り<br><small>人工/単位</small></th>
+        <th class="num">実績歩掛<br><small>人工/単位</small></th>
         <th class="num">1人工あたり<br><small>施工量</small></th>
         <th class="num">稼働日</th>
       </tr></thead>
@@ -1652,11 +1652,11 @@
     }
     const names = Core.nameLookup(state);
     const dash = '<span class="muted">—</span>';
-    // スマホで横スクロールしなくても要点が見えるよう、工種名の次に実績歩掛りと比較を置く
+    // スマホで横スクロールしなくても要点が見えるよう、工種名の次に実績歩掛と比較を置く
     $('#summary-rates').innerHTML = `<table class="rates">
       <thead><tr>
         <th>${bySite ? '現場 / ' : ''}工種</th>
-        <th class="num">実績歩掛り<br><small>人工/単位</small></th>
+        <th class="num">実績歩掛<br><small>人工/単位</small></th>
         <th class="num">数量</th><th class="num">人工</th>
         <th class="num">1人工あたり<br><small>施工量</small></th>
         <th class="num">稼働日<br><small>(数量記録日)</small></th>
@@ -1961,7 +1961,7 @@
     }
   });
 
-  // ---------- 自社の実績歩掛り ----------
+  // ---------- 自社の実績歩掛 ----------
   function companyRateOptions() {
     return {
       doneOnly: $('#cr-target').value !== 'all',
@@ -2022,7 +2022,7 @@
     $('#cr-table').innerHTML = `<table class="rates company">
       <thead><tr>
         <th>工種</th>
-        <th class="num">実績歩掛り</th>
+        <th class="num">実績歩掛</th>
         <th class="num">現場数</th>
         <th class="num">現場ごとの<br>最小〜最大</th>
         <th class="num">1人工あたり<br>施工量</th>
@@ -2038,7 +2038,7 @@
   $('#cr-export').addEventListener('click', () => {
     const o = companyRateOptions();
     const rows = Core.companyRates(state, o, perDay()).filter((r) => r.rate !== null);
-    exportCsv('自社の実績歩掛りの CSV', `自社実績歩掛り_${stamp()}.csv`, Core.companyRatesToCsv(state, rows, companyRateCondition(o)));
+    exportCsv('自社の実績歩掛の CSV', `自社実績歩掛_${stamp()}.csv`, Core.companyRatesToCsv(state, rows, companyRateCondition(o)));
   });
 
   // ---------- 入出力 ----------

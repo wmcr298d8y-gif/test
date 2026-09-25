@@ -203,9 +203,9 @@
       </div>
       <p class="cumul-status" id="c-status"></p>
       <div class="totals" id="c-totals"></div>
-      <h2>工種別の累計と歩掛り</h2>
+      <h2>工種別の累計と歩掛</h2>
       <div class="table-scroll" id="c-table"></div>
-      <p class="muted small">歩掛り = 着工から指定日までの人工合計 ÷ 数量合計（人工/単位）。</p>
+      <p class="muted small">歩掛 = 着工から指定日までの人工合計 ÷ 数量合計（人工/単位）。</p>
     </section>
 
     <!-- 集計 -->
@@ -237,12 +237,12 @@
       </div>
       <div class="table-scroll" id="summary-monthly"></div>
       <div class="section-head">
-        <h2>歩掛り（実績）</h2>
+        <h2>歩掛（実績）</h2>
         <label class="check"><input type="checkbox" id="rate-by-site"> 現場ごとに分ける</label>
       </div>
       <div class="table-scroll" id="summary-rates"></div>
-      <p class="muted small">歩掛り = 期間内の人工合計 ÷ 数量合計。数量を入れていない日の工数も分子に含みます。
-        複数現場をまとめた自社の実績歩掛りは「歩掛り」タブで確認できます。</p>
+      <p class="muted small">歩掛 = 期間内の人工合計 ÷ 数量合計。数量を入れていない日の工数も分子に含みます。
+        複数現場をまとめた自社の実績歩掛は「歩掛」タブで確認できます。</p>
       <h2>大分類別</h2>
       <div id="summary-by-category"></div>
       <h2>小分類別</h2>
@@ -259,10 +259,10 @@
       </div>
     </section>
 
-    <!-- 自社の実績歩掛り -->
+    <!-- 自社の実績歩掛 -->
     <section id="tab-rates" class="panel" role="tabpanel" hidden>
-      <p class="muted small">現場の日報から、工種ごとの自社の実績歩掛り（人工/単位）をまとめます。
-        積算で使う自社の歩掛りマスタを作るときの基礎データです。</p>
+      <p class="muted small">現場の日報から、工種ごとの自社の実績歩掛（人工/単位）をまとめます。
+        積算で使う自社の歩掛マスタを作るときの基礎データです。</p>
       <div class="filters" id="cr-filters">
         <div class="field">
           <label for="cr-target">対象の現場</label>
@@ -285,11 +285,11 @@
       </div>
       <p class="cumul-status" id="cr-summary"></p>
       <div class="table-scroll" id="cr-table"></div>
-      <p class="muted small">実績歩掛り = 人工合計 ÷ 数量合計（規模の大きい現場ほど重みが大きい平均）。
+      <p class="muted small">実績歩掛 = 人工合計 ÷ 数量合計（規模の大きい現場ほど重みが大きい平均）。
         その工種の数量を一度も入れていない現場は計算から除き、「数量なし」に件数を出しています。
         現場数が 2 以下の工種は <span class="pill few">参考</span> を付けています。</p>
       <div class="actions">
-        <button type="button" id="cr-export">CSV 出力（積算の歩掛りマスタ用）</button>
+        <button type="button" id="cr-export">CSV 出力（積算の歩掛マスタ用）</button>
       </div>
     </section>
 
@@ -329,7 +329,7 @@
       <ul class="master-list" id="master-categories"></ul>
 
       <h2>工種（小分類）</h2>
-      <p class="muted small">単位は数量の単位（m・個・台・面 など）です。歩掛りの値は「歩掛り」タブのマスタで登録します。</p>
+      <p class="muted small">単位は数量の単位（m・個・台・面 など）です。歩掛の値は「歩掛」タブのマスタで登録します。</p>
       <form class="add-form wt-add" data-master="workTypes">
         <select name="categoryId" aria-label="大分類" required></select>
         <input type="text" name="name" placeholder="小分類を追加" required>
