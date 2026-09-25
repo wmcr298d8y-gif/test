@@ -76,18 +76,26 @@ body {
   padding: 12px 16px;
   padding-top: calc(12px + env(safe-area-inset-top));
 }
+.app-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 .app-header h1 { margin: 0; font-size: 1.15rem; }
+.role-switch { display: inline-flex; border: 1px solid rgba(255, 255, 255, 0.5); border-radius: 999px; overflow: hidden; }
+.role-switch button {
+  min-height: 30px; padding: 2px 12px; border: 0; border-radius: 0; font-size: 0.8rem;
+  background: transparent; color: var(--primary-text);
+}
+.role-switch button[aria-pressed="true"] { background: var(--primary-text); color: var(--primary); font-weight: 700; }
 
 .tabs {
   position: sticky;
   top: env(safe-area-inset-top, 0px);
   z-index: 10;
-  display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  display: flex;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
 }
 .tabs button {
+  flex: 1 1 0;
+  min-width: 0;
   border: 0;
   background: none;
   padding: 12px 4px;
@@ -357,3 +365,35 @@ button.chip { min-height: 32px; }
 .sheet-total { font-variant-numeric: tabular-nums; }
 .sheet-bar .primary { min-width: 7em; min-height: 48px; font-size: 1.05rem; }
 .unsaved { display: inline-block; font-size: 0.75rem; padding: 1px 8px; border-radius: 999px; background: var(--warn-bg); color: var(--warn-text); font-weight: 700; }
+
+/* ---------- 役割・現場・累計 ---------- */
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.sheet-fields { border: 0; margin: 0; padding: 0; min-width: 0; }
+.sheet-fields:disabled .work-row { opacity: 0.7; }
+.sheet-lock {
+  margin: 0 0 12px; padding: 10px 12px; border-radius: var(--radius);
+  background: var(--warn-bg); color: var(--warn-text); font-weight: 600;
+}
+.pill { display: inline-block; font-size: 0.72rem; font-weight: 700; padding: 1px 8px; border-radius: 999px; vertical-align: middle; }
+.pill.active { background: var(--accent-bg); color: var(--primary); }
+.pill.done { background: var(--warn-bg); color: var(--warn-text); }
+.code-input { flex: 0 0 7em; }
+
+.site-row { flex-direction: column; align-items: stretch !important; gap: 8px; }
+.site-row.is-done { background: color-mix(in srgb, var(--surface) 88%, var(--warn-bg)); }
+.site-main { display: flex; flex-direction: column; gap: 2px; }
+.site-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; align-items: end; }
+.site-fields label { display: flex; flex-direction: column; gap: 2px; font-size: 0.72rem; color: var(--muted); }
+.site-fields select, .site-fields input { min-height: 36px; padding: 4px 8px; font-size: 0.85rem; }
+.site-fields .mock-only { justify-self: end; min-height: 32px; font-size: 0.8rem; }
+
+.cumul-status { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 4px 0 8px; }
+.cat-row th, .cat-row td { background: var(--accent-bg); font-weight: 700; }
+.rates.cumul tfoot th, .rates.cumul tfoot td, .monthly tfoot th, .monthly tfoot td { font-weight: 700; border-top: 2px solid var(--border); }
+.monthly .wt-cell { padding-left: 16px; white-space: nowrap; font-weight: 400; }
+/* 横スクロールで固定される左端の列も、小計行の色に揃える */
+.rates .cat-row > :first-child, .pivot .cat-row > :first-child { background: var(--accent-bg); }
+
+.segmented-mini { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.segmented-mini button { min-height: 30px; padding: 2px 10px; border: 0; border-radius: 0; font-size: 0.8rem; }
+.segmented-mini button[aria-pressed="true"] { background: var(--primary); color: var(--primary-text); }

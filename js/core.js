@@ -54,7 +54,7 @@
       categories: [],
       workTypes: [],
       rateMasters: [],
-      workers: [],
+      employees: [],
       entries: [],
       settings: { ...DEFAULT_SETTINGS, compareMasterIds: [] },
     };
@@ -162,7 +162,12 @@
 
   /** 何も入力していない行（保存時に読み飛ばす） */
   function isEmptyRow(row) {
-    return !row.workTypeId && isBlank(row.quantity) && isBlank(row.note) && isBlank(row.worker);
+    return !row.workTypeId && isBlank(row.quantity) && isBlank(row.note);
+  }
+
+  function isSiteDone(state, siteId) {
+    const site = state.sites.find((x) => x.id === siteId);
+    return !!site && site.status === 'done';
   }
 
   /** 指定日・現場の記録を日報の並び順で返す */
@@ -176,9 +181,10 @@
   /**
    * 日報をまとめて保存する。rows は画面の作業行（id があれば既存の記録）。
    * 日報から消した行の記録は削除する。1 行でもエラーがあれば何も変更しない。
+   * inputBy: 入力者（社員ID）。requireInputBy が true なら必須。完工済みの現場には保存できない。
    * 戻り値: { errors, saved, added, removed }
    */
-  function saveDaySheet(state, date, siteId, rows, now = Date.now()) {
+  function saveDaySheet(state, date, siteId, rows, now = Date.now(), { inputBy = '', requireInputBy = false } = {}) {
     const existing = new Map(dayEntries(state, date, siteId).map((e) => [e.id, e]));
     const errors = [];
     const entries = [];
@@ -193,8 +199,8 @@
         people: Number(r.people),
         hours: Number(r.hours),
         quantity: isBlank(r.quantity) ? '' : Number(r.quantity),
-        worker: String(r.worker || '').trim(),
         note: String(r.note || '').trim(),
+        inputBy: inputBy || (prev && prev.inputBy) || '',
         order: entries.length,
       };
       // 開始・終了時刻は時間を変えると合わなくなるので消す
@@ -205,15 +211,14 @@
       entries.push(entry);
     });
     if (!date || !siteId) errors.unshift(!date ? '日付を入力してください' : '現場を選択してください');
+    if (requireInputBy && !inputBy) errors.unshift('入力者を選択してください');
+    if (isSiteDone(state, siteId)) errors.unshift('完工済みの現場のため保存できません（管理者が完工を解除すると入力できます）');
     if (errors.length) return { errors: [...new Set(errors)], saved: 0, added: 0, removed: 0 };
 
     const keptIds = new Set(entries.map((e) => e.id));
     const removed = [...existing.keys()].filter((id) => !keptIds.has(id));
     const drop = new Set([...existing.keys()]);
     state.entries = state.entries.filter((e) => !drop.has(e.id)).concat(entries);
-    for (const e of entries) {
-      if (e.worker && !state.workers.some((w) => w.name === e.worker)) state.workers.push({ id: newId(), name: e.worker });
-    }
     return {
       errors: [], saved: entries.length,
       added: entries.filter((e) => !existing.has(e.id)).length,
@@ -232,7 +237,7 @@
     return {
       date,
       rows: dayEntries(state, date, siteId).map((e) => ({
-        workTypeId: e.workTypeId, people: e.people, hours: e.hours, worker: e.worker || '', quantity: '', note: '',
+        workTypeId: e.workTypeId, people: e.people, hours: e.hours, quantity: '', note: '',
       })),
     };
   }
@@ -283,6 +288,36 @@
       rows.set(key, row);
     }
     return { dates, rows };
+  }
+
+  /**
+   * 月 × キー（小分類・大分類など）の延べ工数(h)。
+   * 戻り値: { months: ['YYYY-MM', ...], rows: Map(key → { [month]: h }), totals: Map(key → h), monthTotals: { [month]: h }, total }
+   */
+  function monthlyMatrix(entries, keyFn) {
+    const months = [...new Set(entries.map((e) => e.date.slice(0, 7)))].sort();
+    const rows = new Map();
+    const totals = new Map();
+    const monthTotals = {};
+    let total = 0;
+    for (const e of entries) {
+      const key = keyFn(e);
+      const m = e.date.slice(0, 7);
+      const mh = entryManHours(e);
+      const row = rows.get(key) || {};
+      row[m] = round2((row[m] || 0) + mh);
+      rows.set(key, row);
+      totals.set(key, round2((totals.get(key) || 0) + mh));
+      monthTotals[m] = round2((monthTotals[m] || 0) + mh);
+      total += mh;
+    }
+    return { months, rows, totals, monthTotals, total: round2(total) };
+  }
+
+  /** 現場の記録がある期間（最初と最後の日付） */
+  function siteDateRange(state, siteId) {
+    const dates = state.entries.filter((e) => e.siteId === siteId).map((e) => e.date).sort();
+    return { first: dates[0] || '', last: dates[dates.length - 1] || '' };
   }
 
   /**
@@ -438,7 +473,7 @@
     return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
   }
 
-  const CSV_HEADER = ['日付', '現場', '大分類', '小分類', '作業者', '人数', '時間(h/人)', '延べ工数(h)', '人工', '数量', '単位', '開始', '終了', '休憩(分)', '備考'];
+  const CSV_HEADER = ['日付', '作番', '現場', '大分類', '小分類', '人数', '時間(h/人)', '延べ工数(h)', '人工', '数量', '単位', '入力者', '備考'];
 
   function entriesToCsv(state, entries) {
     const names = nameLookup(state);
@@ -449,10 +484,11 @@
     for (const e of sorted) {
       const mh = entryManHours(e);
       lines.push([
-        e.date, names.site(e.siteId), names.categoryOfWorkType(e.workTypeId), names.workType(e.workTypeId), e.worker || '',
+        e.date, names.siteCode(e.siteId), names.siteName(e.siteId),
+        names.categoryOfWorkType(e.workTypeId), names.workType(e.workTypeId),
         e.people, e.hours, mh, round2(mh / perDay),
         isBlank(e.quantity) ? '' : e.quantity, isBlank(e.quantity) ? '' : units.get(e.workTypeId) || '',
-        e.start || '', e.end || '', e.breakMinutes ?? '', e.note || '',
+        e.inputBy ? names.employee(e.inputBy) : '', e.note || '',
       ].map(csvEscape).join(','));
     }
     // Excel で文字化けしないよう BOM 付き
@@ -483,7 +519,7 @@
   }
 
   /**
-   * CSV（本アプリの出力形式）を取り込む。未登録の現場・大分類・小分類は自動追加する。
+   * CSV（本アプリの出力形式）を取り込む。現場は作番（なければ現場名）で照合し、未登録の現場・大分類・小分類は自動追加する。
    * 旧形式（「工種」列のみ）の CSV は大分類「未分類」として取り込む。
    * state を直接更新し、取り込み件数とエラーを返す。
    */
@@ -493,18 +529,19 @@
     const header = rows[0].map((h) => h.trim());
     const col = (...names) => names.map((n) => header.indexOf(n)).find((i) => i >= 0) ?? -1;
     const idx = {
-      date: col('日付'), site: col('現場'), category: col('大分類'), workType: col('小分類', '工種'),
-      worker: col('作業者'), people: col('人数'), hours: col('時間(h/人)'), start: col('開始'), end: col('終了'),
-      breakMinutes: col('休憩(分)'), note: col('備考'), quantity: col('数量'), unit: col('単位'),
+      date: col('日付'), siteCode: col('作番'), site: col('現場'), category: col('大分類'), workType: col('小分類', '工種'),
+      people: col('人数'), hours: col('時間(h/人)'), start: col('開始'), end: col('終了'),
+      breakMinutes: col('休憩(分)'), note: col('備考'), quantity: col('数量'), unit: col('単位'), inputBy: col('入力者'),
     };
-    if (idx.date < 0 || idx.site < 0 || idx.workType < 0 || idx.hours < 0) {
-      return { added: 0, errors: ['見出し行に 日付・現場・小分類・時間(h/人) が必要です'] };
+    if (idx.date < 0 || (idx.site < 0 && idx.siteCode < 0) || idx.workType < 0 || idx.hours < 0) {
+      return { added: 0, errors: ['見出し行に 日付・作番（または現場）・小分類・時間(h/人) が必要です'] };
     }
     const get = (r, i) => (i >= 0 ? (r[i] || '').trim() : '');
     let added = 0;
     const errors = [];
     rows.slice(1).forEach((r, n) => {
       const siteName = get(r, idx.site);
+      const siteCode = get(r, idx.siteCode);
       const wtName = get(r, idx.workType);
       let workTypeId = '';
       if (wtName) {
@@ -512,17 +549,19 @@
         workTypeId = findOrAddWorkType(state, catId, wtName, get(r, idx.unit));
       }
       let siteId = '';
-      if (siteName) {
-        let site = state.sites.find((x) => x.name === siteName);
-        if (!site) { site = { id: newId(), name: siteName }; state.sites.push(site); }
+      if (siteName || siteCode) {
+        let site = (siteCode && state.sites.find((x) => x.code === siteCode)) ||
+          (!siteCode && state.sites.find((x) => x.name === siteName));
+        if (!site) { site = normalizeSite({ id: newId(), code: siteCode, name: siteName || siteCode }); state.sites.push(site); }
         siteId = site.id;
       }
+      const inputByName = get(r, idx.inputBy);
+      const emp = inputByName && state.employees.find((x) => x.name === inputByName);
       const entry = {
         id: newId(),
         date: get(r, idx.date).replace(/\//g, '-'),
         siteId,
         workTypeId,
-        worker: get(r, idx.worker),
         people: Number(get(r, idx.people) || 1),
         hours: Number(get(r, idx.hours)),
         start: get(r, idx.start),
@@ -530,6 +569,7 @@
         breakMinutes: get(r, idx.breakMinutes) === '' ? '' : Number(get(r, idx.breakMinutes)),
         note: get(r, idx.note),
         quantity: get(r, idx.quantity) === '' ? '' : Number(get(r, idx.quantity)),
+        inputBy: emp ? emp.id : '',
         createdAt: Date.now() + n,
       };
       const errs = validateEntry(entry);
@@ -544,15 +584,32 @@
       const m = new Map(list.map((x) => [x.id, x.name]));
       return (id) => m.get(id) || '(削除済み)';
     };
-    const site = byId(state.sites);
+    const siteMap = new Map(state.sites.map((x) => [x.id, x]));
+    const site = (id) => (siteMap.has(id) ? siteLabel(siteMap.get(id)) : '(削除済み)');
+    const siteName = (id) => (siteMap.has(id) ? siteMap.get(id).name : '(削除済み)');
+    const siteCode = (id) => (siteMap.has(id) ? siteMap.get(id).code || '' : '');
+    const employee = byId(state.employees || []);
     const workType = byId(state.workTypes);
     const category = byId(state.categories);
     const catOf = categoryMap(state.workTypes);
     const categoryOfWorkType = (wtId) => (catOf.has(wtId) ? category(catOf.get(wtId)) : '(削除済み)');
     return {
-      site, workType, category, categoryOfWorkType,
+      site, siteName, siteCode, employee, workType, category, categoryOfWorkType,
       workTypeFull: (wtId) => `${categoryOfWorkType(wtId)} › ${workType(wtId)}`,
     };
+  }
+
+  /** 表示用の現場名（作番 現場名） */
+  function siteLabel(site) {
+    return site.code ? `${site.code} ${site.name}` : site.name;
+  }
+
+  /**
+   * 現場。作番・現場名は kintone の現場アプリの値を使う。
+   * status（active: 稼働中 / done: 完工）・completedOn・rateMasterId はこのアプリで管理者が設定する。
+   */
+  function normalizeSite(x) {
+    return { code: '', status: 'active', completedOn: '', rateMasterId: '', ...x };
   }
 
   /** 読み込んだ JSON を現在の形式に整える（旧形式の工種は大分類「未分類」に入れる） */
@@ -560,13 +617,13 @@
     if (!raw || typeof raw !== 'object') return emptyState();
     const state = {
       version: 2,
-      sites: Array.isArray(raw.sites) ? raw.sites : [],
+      sites: Array.isArray(raw.sites) ? raw.sites.map(normalizeSite) : [],
       categories: Array.isArray(raw.categories) ? raw.categories : [],
       workTypes: [],
       rateMasters: Array.isArray(raw.rateMasters)
         ? raw.rateMasters.map((m) => ({ note: '', ...m, rates: { ...(m.rates || {}) } }))
         : [],
-      workers: Array.isArray(raw.workers) ? raw.workers : [],
+      employees: Array.isArray(raw.employees) ? raw.employees : [],
       entries: Array.isArray(raw.entries) ? raw.entries : [],
       settings: {
         ...DEFAULT_SETTINGS, ...(raw.settings || {}),
@@ -611,8 +668,25 @@
     };
   }
 
+  function isoLocal(d) {
+    // toISOString は UTC になり日本時間では前日にずれるため、端末の日付で組み立てる
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+
+  /** endIso から遡って平日 count 日分の日付（古い順） */
+  function weekdaysBack(endIso, count) {
+    const days = [];
+    const d = new Date(endIso + 'T00:00:00');
+    while (days.length < count) {
+      if (d.getDay() !== 0 && d.getDay() !== 6) days.unshift(isoLocal(d));
+      d.setDate(d.getDate() - 1);
+    }
+    return days;
+  }
+
   /**
-   * お試し用のサンプル（現場 2 件・歩掛りマスタ 2 件・直近 2 週間の記録）を追加する。
+   * お試し用のサンプルを追加する。
+   * 稼働中の現場 2 件（直近 10 営業日）、完工済みの現場 1 件（約 1 か月前に完工）、社員 3 名、歩掛りマスタ 2 件。
    * 歩掛りの値はデモ用の仮の値で、国交省などの実際の値ではない。
    */
   function addSampleData(state, todayIso) {
@@ -628,12 +702,22 @@
     const gen = addRateMaster(state, '元請 ○○建設（サンプル値）', { note: 'お試し用の仮の値です。' });
     for (const [n, a, b] of sampleRates) { std.rates[wt(n).id] = a; gen.rates[wt(n).id] = b; }
 
-    const siteA = { id: newId(), name: '【サンプル】A病院 改修電気工事', rateMasterId: '' };
-    const siteB = { id: newId(), name: '【サンプル】B庁舎 新築電気工事', rateMasterId: gen.id };
-    state.sites.push(siteA, siteB);
-    for (const name of ['電工 田中', '電工 佐藤', '△△電設（協力会社）']) {
-      if (!state.workers.some((w) => w.name === name)) state.workers.push({ id: newId(), name });
-    }
+    const employees = [['E001', '山田 太郎'], ['E002', '鈴木 一郎'], ['E003', '高橋 健']].map(([code, name]) => {
+      let emp = state.employees.find((x) => x.code === code);
+      if (!emp) { emp = { id: newId(), code, name }; state.employees.push(emp); }
+      return emp;
+    });
+
+    const today = todayIso;
+    const monthAgo = new Date(today + 'T00:00:00');
+    monthAgo.setDate(monthAgo.getDate() - 30);
+    const doneDays = weekdaysBack(isoLocal(monthAgo), 20);
+    const sites = [
+      normalizeSite({ id: newId(), code: '26-015', name: '【サンプル】A病院 改修電気工事' }),
+      normalizeSite({ id: newId(), code: '26-021', name: '【サンプル】B庁舎 新築電気工事', rateMasterId: gen.id }),
+      normalizeSite({ id: newId(), code: '25-088', name: '【サンプル】C工場 照明更新工事', status: 'done', completedOn: doneDays[doneDays.length - 1] }),
+    ];
+    state.sites.push(...sites);
 
     // 工程の順に作業が進むように、日ごとの作業候補を切り替える
     const phases = [
@@ -641,48 +725,42 @@
       ['ケーブル配線（VVF等）', '幹線ケーブル敷設', 'LAN配線'],
       ['照明器具取付', 'コンセント取付', 'スイッチ取付', '分電盤据付', '自火報 感知器取付'],
     ].map((names) => names.filter((n) => wt(n)));
-    const days = [];
-    const d = new Date(todayIso + 'T00:00:00');
-    while (days.length < 10) {
-      if (d.getDay() !== 0 && d.getDay() !== 6) {
-        // toISOString は UTC になり日本時間では前日にずれるため、端末の日付で組み立てる
-        days.unshift(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`);
-      }
-      d.setDate(d.getDate() - 1);
-    }
     const rand = seededRandom(Number(todayIso.replace(/-/g, '')));
     const pick = (arr) => arr[Math.floor(rand() * arr.length)];
     const rateBy = new Map(sampleRates.map(([n, a]) => [n, a]));
     let n = 0;
-    days.forEach((date, i) => {
-      const phase = phases[Math.min(phases.length - 1, Math.floor((i / days.length) * phases.length))];
-      for (const site of [siteA, siteB]) {
-        const tasks = new Set([pick(phase), pick(phase)]);
-        for (const name of tasks) {
+    const plan = [
+      [sites[0], weekdaysBack(today, 10), employees[0], 0],
+      [sites[1], weekdaysBack(today, 10), employees[1], 0.1], // B 現場はやや手間がかかる想定
+      [sites[2], doneDays, employees[2], -0.05],
+    ];
+    for (const [site, days, emp, bias] of plan) {
+      days.forEach((date, i) => {
+        const phase = phases[Math.min(phases.length - 1, Math.floor((i / days.length) * phases.length))];
+        [...new Set([pick(phase), pick(phase)])].forEach((name, order) => {
           const people = 1 + Math.floor(rand() * 3);
-          const hours = pick([8, 8, 8, 6, 4]);
+          const hours = pick([8, 8, 8, 6, 4, 3.5]);
           const manDays = (people * hours) / (state.settings.hoursPerManDay || 8);
-          // 実績は標準の 0.8〜1.35 倍程度でばらつかせる。B 現場はやや手間がかかる想定
-          const factor = 0.8 + rand() * 0.45 + (site === siteB ? 0.1 : 0);
+          // 実績は標準の 0.8〜1.25 倍程度でばらつかせる
+          const factor = 0.8 + rand() * 0.45 + bias;
           const raw = manDays / (rateBy.get(name) * factor);
           const quantity = raw >= 20 ? Math.round(raw / 5) * 5 : Math.max(1, Math.round(raw));
           state.entries.push({
-            id: newId(), date, siteId: site.id, workTypeId: wt(name).id,
-            worker: pick(state.workers).name, people, hours,
-            start: '', end: '', breakMinutes: '', quantity,
+            id: newId(), date, siteId: site.id, workTypeId: wt(name).id, people, hours,
             // 一部の日は数量を翌日にまとめて入力した想定で空欄にする
-            ...(rand() < 0.15 ? { quantity: '' } : {}),
-            note: '', createdAt: Date.now() + n++,
+            quantity: rand() < 0.15 ? '' : quantity,
+            note: '', inputBy: emp.id, order, createdAt: Date.now() + n++,
           });
-        }
-      }
-    });
+        });
+      });
+    }
     state.settings.compareMasterIds = [std.id, SITE_MASTER];
-    return { sites: [siteA, siteB], masters: [std, gen] };
+    return { sites, masters: [std, gen], employees };
   }
 
   const Core = {
-    addSampleData, isEmptyRow, dayEntries, saveDaySheet, previousDayRows,
+    addSampleData, isEmptyRow, isSiteDone, dayEntries, saveDaySheet, previousDayRows,
+    monthlyMatrix, siteDateRange, siteLabel, normalizeSite,
     DEFAULT_TAXONOMY, UNCATEGORIZED, SITE_MASTER, emptyState,
     rateOf, compareStandards, addRateMaster, setRate, rateMasterToCsv, importRateMasterCsv, mergeDefaultTaxonomy, defaultUnit,
     findOrAddCategory, findOrAddWorkType, workTypesOfCategory,

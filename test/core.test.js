@@ -137,7 +137,7 @@ test('CSV 出力 → 取り込みで往復できる（大分類・小分類・�
   const src = sampleState();
   src.entries[0].quantity = 45.5;
   const csv = Core.entriesToCsv(src, src.entries);
-  assert.ok(csv.startsWith('﻿日付,現場,大分類,小分類'));
+  assert.ok(csv.startsWith('\uFEFF日付,作番,現場,大分類,小分類'));
   assert.match(csv, /配管工事,電線管敷設（露出）,.*,45\.5,m,/);
 
   const dst = Core.emptyState();
@@ -235,13 +235,13 @@ test('歩掛りマスタ CSV: ひな形出力 → 記入 → 取り込み（未�
   const m = Core.addRateMaster(s, '国交省');
   Core.setRate(m, 'w2', 0.15);
   const csv = Core.rateMasterToCsv(s, m);
-  const lines = csv.replace(/^﻿/, '').trim().split('\r\n');
+  const lines = csv.replace(/^\uFEFF/, '').trim().split('\r\n');
   assert.equal(lines[0], '大分類,小分類,単位,歩掛り(人工/単位)');
   assert.equal(lines.length, 1 + s.workTypes.length); // 未登録も空欄で出る
   assert.ok(lines.includes('照明・配線器具,照明器具取付,台,0.15'));
 
   const dst = Core.addRateMaster(s, '取込先');
-  const filled = '﻿' + [
+  const filled = '\uFEFF' + [
     '大分類,小分類,単位,歩掛り(人工/単位)',
     '配管工事,電線管敷設（露出）,m,0.035',
     '配管工事,ボックス取付,個,',            // 空欄は読み飛ばし
@@ -278,21 +278,25 @@ test('normalizeState: 旧形式の小分類の標準歩掛りをマスタへ移�
   assert.notEqual(Core.emptyState().settings.compareMasterIds, Core.emptyState().settings.compareMasterIds);
 });
 
-test('addSampleData: 現場・マスタ・直近 10 営業日の記録を追加し、集計できる', () => {
+test('addSampleData: 稼働中 2 現場・完工 1 現場・社員・マスタを追加し、集計できる', () => {
   const s = Core.emptyState();
-  const { sites, masters } = Core.addSampleData(s, '2026-09-25');
-  assert.equal(s.sites.length, 2);
-  assert.equal(s.rateMasters.length, 2);
+  const { sites, masters, employees } = Core.addSampleData(s, '2026-09-25');
+  assert.equal(s.sites.length, 3);
+  assert.equal(employees.length, 3);
+  assert.deepEqual(sites.map((x) => x.status), ['active', 'active', 'done']);
+  assert.match(sites[0].code, /^\d{2}-\d{3}$/);
   assert.match(masters[0].name, /サンプル/);
   assert.equal(sites[1].rateMasterId, masters[1].id);
-  const dates = [...new Set(s.entries.map((e) => e.date))].sort();
-  assert.equal(dates.length, 10);
-  assert.equal(dates[dates.length - 1], '2026-09-25');
-  assert.ok(dates.every((d) => ![0, 6].includes(new Date(d + 'T00:00:00').getDay())));
-  assert.ok(s.entries.every((e) => Core.validateEntry(e).length === 0));
+  const datesOf = (site) => [...new Set(s.entries.filter((e) => e.siteId === site.id).map((e) => e.date))].sort();
+  assert.equal(datesOf(sites[0]).length, 10);
+  assert.equal(datesOf(sites[0]).pop(), '2026-09-25');
+  // 完工現場は完工日で記録が終わっている
+  assert.equal(datesOf(sites[2]).pop(), sites[2].completedOn);
+  assert.ok(sites[2].completedOn < '2026-08-27');
+  assert.ok(s.entries.every((e) => Core.validateEntry(e).length === 0 && e.inputBy));
+  assert.ok(s.entries.every((e) => [0, 6].indexOf(new Date(e.date + 'T00:00:00').getDay()) < 0));
   const rows = Core.compareStandards(Core.productivity(s.entries, s.workTypes, 8, { bySite: true }), s, s.settings.compareMasterIds);
   assert.ok(rows.some((r) => r.standards[Core.SITE_MASTER].rate !== null));
-  assert.ok(rows.every((r) => r.rate === null || r.standards[masters[0].id].ratio > 50));
   // 同じ日付なら同じ内容になる
   const t = Core.emptyState();
   Core.addSampleData(t, '2026-09-25');
@@ -303,16 +307,16 @@ test('saveDaySheet: 1 日・1 現場の複数工種をまとめて保存・更�
   const s = sampleState();
   s.entries = [];
   const rows = [
-    { workTypeId: 'w1', people: 2, hours: 4, quantity: 30, worker: '田中' },
+    { workTypeId: 'w1', people: 2, hours: 4, quantity: 30 },
     { workTypeId: 'w3', people: 2, hours: 4, quantity: 12 },
     { workTypeId: '', people: 1, hours: 8, quantity: '' }, // 空行は無視
     { workTypeId: 'w2', people: 1, hours: 8, quantity: '', note: '器具 3F' },
   ];
-  const r1 = Core.saveDaySheet(s, '2026-09-25', 's1', rows, 1000);
+  const r1 = Core.saveDaySheet(s, '2026-09-25', 's1', rows, 1000, { inputBy: 'emp1' });
   assert.deepEqual(r1, { errors: [], saved: 3, added: 3, removed: 0 });
   let day = Core.dayEntries(s, '2026-09-25', 's1');
   assert.deepEqual(day.map((e) => [e.workTypeId, e.people * e.hours, e.order]), [['w1', 8, 0], ['w3', 8, 1], ['w2', 8, 2]]);
-  assert.ok(s.workers.some((w) => w.name === '田中'));
+  assert.ok(day.every((e) => e.inputBy === 'emp1'));
 
   // 並べ替え・1 行更新・1 行削除
   const edited = [
@@ -362,7 +366,73 @@ test('previousDayRows: 同じ現場の直近の日の作業を数量なしで呼
   s.entries.push({ id: 'e5', date: '2026-09-03', siteId: 's1', workTypeId: 'w3', people: 2, hours: 8, quantity: 10, note: 'x' });
   const prev = Core.previousDayRows(s, 's1', '2026-09-10');
   assert.equal(prev.date, '2026-09-03');
-  assert.deepEqual(prev.rows, [{ workTypeId: 'w3', people: 2, hours: 8, worker: '', quantity: '', note: '' }]);
+  assert.deepEqual(prev.rows, [{ workTypeId: 'w3', people: 2, hours: 8, quantity: '', note: '' }]);
   assert.equal(Core.previousDayRows(s, 's1', '2026-09-03').date, '2026-09-01');
   assert.equal(Core.previousDayRows(s, 's1', '2026-09-01').date, null);
+});
+
+test('saveDaySheet: 入力者の必須チェックと、完工現場への保存禁止', () => {
+  const s = sampleState();
+  const row = [{ workTypeId: 'w1', people: 1, hours: 8 }];
+  assert.match(Core.saveDaySheet(s, '2026-09-25', 's1', row, 1, { requireInputBy: true }).errors[0], /入力者/);
+  // 入力者を変えずに再保存したときは前回の入力者を残す
+  Core.saveDaySheet(s, '2026-09-25', 's1', row, 1, { inputBy: 'emp1' });
+  const saved = Core.dayEntries(s, '2026-09-25', 's1');
+  Core.saveDaySheet(s, '2026-09-25', 's1', saved.map((e) => ({ ...e, people: 2 })));
+  assert.equal(Core.dayEntries(s, '2026-09-25', 's1')[0].inputBy, 'emp1');
+
+  s.sites[0].status = 'done';
+  const before = s.entries.length;
+  const res = Core.saveDaySheet(s, '2026-09-26', 's1', row, 1, { inputBy: 'emp1' });
+  assert.match(res.errors[0], /完工/);
+  assert.equal(s.entries.length, before);
+  assert.equal(Core.isSiteDone(s, 's1'), true);
+  assert.equal(Core.isSiteDone(s, 's2'), false);
+});
+
+test('monthlyMatrix: 月 × 小分類の延べ工数', () => {
+  const entries = [
+    { date: '2026-08-30', workTypeId: 'a', people: 2, hours: 8 },
+    { date: '2026-08-31', workTypeId: 'b', people: 1, hours: 4 },
+    { date: '2026-09-01', workTypeId: 'a', people: 1, hours: 8 },
+    { date: '2026-09-02', workTypeId: 'a', people: 3, hours: 2.5 },
+  ];
+  const m = Core.monthlyMatrix(entries, (e) => e.workTypeId);
+  assert.deepEqual(m.months, ['2026-08', '2026-09']);
+  assert.deepEqual(m.rows.get('a'), { '2026-08': 16, '2026-09': 15.5 });
+  assert.deepEqual(m.rows.get('b'), { '2026-08': 4 });
+  assert.equal(m.totals.get('a'), 31.5);
+  assert.deepEqual(m.monthTotals, { '2026-08': 20, '2026-09': 15.5 });
+  assert.equal(m.total, 35.5);
+});
+
+test('作番: 表示・CSV・取り込みでの照合', () => {
+  const s = sampleState();
+  s.sites[0].code = '26-015';
+  s.employees = [{ id: 'emp1', code: 'E001', name: '山田 太郎' }];
+  s.entries[0].inputBy = 'emp1';
+  const names = Core.nameLookup(s);
+  assert.equal(names.site('s1'), '26-015 A現場');
+  assert.equal(names.siteName('s1'), 'A現場');
+  assert.equal(names.site('s2'), 'B現場'); // 作番なし
+  const csv = Core.entriesToCsv(s, s.entries);
+  assert.match(csv, /2026-09-01,26-015,A現場,配管工事,電線管敷設（露出）,3,8,24,3,,,山田 太郎,/);
+
+  // 作番で既存の現場に紐づく（現場名が違っていても）
+  const dst = Core.emptyState();
+  dst.sites = [Core.normalizeSite({ id: 'x', code: '26-015', name: 'A現場（正式名称）' })];
+  dst.employees = [{ id: 'emp9', code: 'E001', name: '山田 太郎' }];
+  const { added, errors } = Core.importCsv(dst, csv);
+  assert.deepEqual(errors, []);
+  assert.equal(added, 4);
+  assert.equal(dst.sites.length, 2); // A は既存、B は作番なし → 名前で新規
+  const a = dst.entries.filter((e) => e.siteId === 'x');
+  assert.equal(a.length, 2);
+  assert.equal(a.find((e) => e.people === 3).inputBy, 'emp9');
+});
+
+test('siteDateRange', () => {
+  const s = sampleState();
+  assert.deepEqual(Core.siteDateRange(s, 's1'), { first: '2026-09-01', last: '2026-09-01' });
+  assert.deepEqual(Core.siteDateRange(s, 'none'), { first: '', last: '' });
 });

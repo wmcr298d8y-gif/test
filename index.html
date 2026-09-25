@@ -12,14 +12,20 @@
 <body>
   <header class="app-header">
     <h1>現場工数記録</h1>
+    <!-- 本番では kintone にログインしたアカウントで自動的に切り替わる。モックでは手動で切り替える -->
+    <div class="role-switch" role="group" aria-label="画面の切り替え（モック用）">
+      <button type="button" data-role="site" aria-pressed="true">現場用</button>
+      <button type="button" data-role="admin" aria-pressed="false">管理者用</button>
+    </div>
   </header>
 
   <nav class="tabs" role="tablist">
-    <button role="tab" data-tab="entry" aria-selected="true">入力</button>
-    <button role="tab" data-tab="list">一覧</button>
-    <button role="tab" data-tab="summary">集計</button>
-    <button role="tab" data-tab="rates">歩掛り</button>
-    <button role="tab" data-tab="master">設定</button>
+    <button role="tab" data-tab="entry" data-roles="site admin" aria-selected="true">入力</button>
+    <button role="tab" data-tab="list" data-roles="site admin">一覧</button>
+    <button role="tab" data-tab="cumul" data-roles="site admin">累計</button>
+    <button role="tab" data-tab="summary" data-roles="admin">集計</button>
+    <button role="tab" data-tab="rates" data-roles="admin">歩掛り</button>
+    <button role="tab" data-tab="master" data-roles="admin">設定</button>
   </nav>
 
   <main>
@@ -27,8 +33,9 @@
     <section id="tab-entry" class="panel" role="tabpanel">
       <div class="welcome" id="welcome" hidden>
         <h2>はじめに</h2>
-        <p>サンプルデータ（現場 2 件・歩掛りマスタ 2 件・2 週間分の記録）を入れると、集計や歩掛りの比較をすぐに試せます。
-          サンプルは「設定 → 全データを削除」でいつでも消せます。</p>
+        <p>サンプルデータ（現場 3 件〔うち完工 1 件〕・社員 3 名・歩掛りマスタ 2 件・記録）を入れると、
+          日報の入力や累計・集計をすぐに試せます。画面右上で「現場用」「管理者用」を切り替えられます（モック用の切り替えです）。
+          サンプルは「管理者用 → 設定 → 全データを削除」でいつでも消せます。</p>
         <div class="actions wrap">
           <button type="button" class="primary" id="load-sample">サンプルデータで試す</button>
           <button type="button" id="start-own">自分のデータで始める</button>
@@ -36,6 +43,10 @@
       </div>
       <form id="entry-form" novalidate>
         <div class="sheet-head">
+          <div class="field">
+            <label for="f-inputby">入力者</label>
+            <select id="f-inputby" name="inputBy"></select>
+          </div>
           <div class="field">
             <label for="f-date">日付</label>
             <input id="f-date" type="date" name="date" required>
@@ -46,14 +57,17 @@
           </div>
         </div>
         <div class="day-sites" id="day-sites"></div>
+        <p class="sheet-lock" id="sheet-lock" hidden></p>
 
-        <div class="sheet-rows" id="sheet-rows"></div>
+        <fieldset class="sheet-fields" id="sheet-fields">
+          <legend class="visually-hidden">作業</legend>
+          <div class="sheet-rows" id="sheet-rows"></div>
 
-        <div class="sheet-tools">
-          <button type="button" class="add-row" id="add-row">＋ 作業を追加</button>
-          <button type="button" id="load-prev">前回の作業を呼び出す</button>
-        </div>
-        <datalist id="worker-list"></datalist>
+          <div class="sheet-tools">
+            <button type="button" class="add-row" id="add-row">＋ 作業を追加</button>
+            <button type="button" id="load-prev">前回の作業を呼び出す</button>
+          </div>
+        </fieldset>
         <ul class="errors" id="form-errors"></ul>
 
         <div class="sheet-bar">
@@ -61,6 +75,27 @@
           <button type="submit" class="primary" id="save-sheet">保存</button>
         </div>
       </form>
+    </section>
+
+    <!-- 累計 -->
+    <section id="tab-cumul" class="panel" role="tabpanel" hidden>
+      <div class="filters">
+        <div class="field"><label for="c-site">現場</label><select id="c-site"></select></div>
+        <div class="field"><label for="c-asof">時点（この日までの累計）</label><input id="c-asof" type="date"></div>
+        <div class="field wide">
+          <span class="label">時点</span>
+          <div class="quick" id="c-quick">
+            <button type="button" data-asof="today">今日</button>
+            <button type="button" data-asof="lastmonth">先月末</button>
+            <button type="button" data-asof="done">完工時</button>
+          </div>
+        </div>
+      </div>
+      <p class="cumul-status" id="c-status"></p>
+      <div class="totals" id="c-totals"></div>
+      <h2>工種別の累計と歩掛り</h2>
+      <div class="table-scroll" id="c-table"></div>
+      <p class="muted small">歩掛り = 着工から指定日までの人工合計 ÷ 数量合計（人工/単位）。</p>
     </section>
 
     <!-- 一覧 -->
@@ -97,6 +132,14 @@
         </div>
       </div>
       <div class="totals" id="summary-totals"></div>
+      <div class="section-head">
+        <h2>月別・工種別</h2>
+        <div class="segmented-mini" role="group" aria-label="月別集計の単位">
+          <button type="button" data-month-unit="md" aria-pressed="true">人工</button>
+          <button type="button" data-month-unit="h" aria-pressed="false">時間(h)</button>
+        </div>
+      </div>
+      <div class="table-scroll" id="summary-monthly"></div>
       <div class="section-head">
         <h2>歩掛り（実績）</h2>
         <label class="check"><input type="checkbox" id="rate-by-site"> 現場ごとに分ける</label>
@@ -144,12 +187,23 @@
     <!-- 設定 -->
     <section id="tab-master" class="panel" role="tabpanel" hidden>
       <h2>現場</h2>
-      <p class="muted small">現場ごとに元請の歩掛りマスタを設定しておくと、集計で「各現場の元請マスタ」と比較できます。</p>
+      <p class="muted small">作番・現場名は kintone の現場アプリから取得します（モックでは下の欄で追加）。
+        状態・完工日・元請の歩掛りマスタはこのアプリで設定します。完工にした現場は入力できなくなり、累計は完工日時点で確定します。</p>
       <form class="add-form" data-master="sites">
-        <input type="text" name="name" placeholder="現場名を追加" required>
+        <input type="text" name="code" placeholder="作番" class="code-input" required aria-label="作番">
+        <input type="text" name="name" placeholder="現場名" required aria-label="現場名">
         <button type="submit">追加</button>
       </form>
       <ul class="master-list" id="master-sites"></ul>
+
+      <h2>社員（入力者）</h2>
+      <p class="muted small">管理番号・氏名は kintone の社員アプリから取得します（モックでは下の欄で追加）。</p>
+      <form class="add-form" data-master="employees">
+        <input type="text" name="code" placeholder="管理番号" class="code-input" required aria-label="管理番号">
+        <input type="text" name="name" placeholder="氏名" required aria-label="氏名">
+        <button type="submit">追加</button>
+      </form>
+      <ul class="master-list" id="master-employees"></ul>
 
       <h2>工種（大分類）</h2>
       <form class="add-form" data-master="categories">
@@ -170,13 +224,6 @@
       <div class="actions wrap">
         <button type="button" id="merge-defaults">電気設備の標準工種を追加（不足分のみ）</button>
       </div>
-
-      <h2>作業者・業者（入力候補）</h2>
-      <form class="add-form" data-master="workers">
-        <input type="text" name="name" placeholder="名前を追加" required>
-        <button type="submit">追加</button>
-      </form>
-      <ul class="master-list" id="master-workers"></ul>
 
       <h2>換算</h2>
       <div class="field inline">

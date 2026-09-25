@@ -216,6 +216,31 @@
     return wt ? wt.categoryId : '';
   }
 
+  // ---------- 現場用 / 管理者用 ----------
+  // 本番では kintone にログインしたアカウントで決まる。モックでは画面右上で切り替える
+  function role() {
+    return state.settings.role === 'admin' ? 'admin' : 'site';
+  }
+
+  function applyRole() {
+    const r = role();
+    document.body.dataset.role = r;
+    $$('.role-switch [data-role]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.role === r)));
+    $$('.tabs [role=tab]').forEach((b) => { b.hidden = !b.dataset.roles.split(' ').includes(r); });
+  }
+
+  $$('.role-switch [data-role]').forEach((b) => b.addEventListener('click', async () => {
+    if (b.dataset.role === role()) return;
+    if (!await confirmDiscard()) return;
+    state.settings.role = b.dataset.role;
+    save();
+    applyRole();
+    // 未保存の日報は破棄済み。選べる現場が変わるので読み直す
+    sheet.dirty = false;
+    loadSheet(sheet.date, sheet.siteId || defaultSiteId());
+    showTab($('.tabs [aria-selected=true]').hidden ? 'entry' : currentTab());
+  }));
+
   // ---------- タブ ----------
   function showTab(name) {
     $$('.tabs [role=tab]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === name)));
@@ -254,14 +279,13 @@
       people: src.people ?? 1,
       hours: src.hours ?? 8,
       quantity: Core.isBlank(src.quantity) ? '' : src.quantity,
-      worker: src.worker || '',
       note: src.note || '',
     };
   }
 
-  /** 新しい行は直前の行の大分類・人数・時間・作業者を引き継ぐ（同じ班で工種だけ変わることが多いため） */
+  /** 新しい行は直前の行の大分類・人数・時間を引き継ぐ（同じ班で工種だけ変わることが多いため） */
   function newRowLike(last) {
-    return makeRow(last ? { categoryId: last.categoryId, people: last.people, hours: last.hours, worker: last.worker } : {});
+    return makeRow(last ? { categoryId: last.categoryId, people: last.people, hours: last.hours } : {});
   }
 
   // 増減ボタンの刻みと範囲（時間は 0.25h = 15 分刻み）
@@ -304,7 +328,7 @@
 
   /** 日付・現場の日報を保存済みの記録から読み込む */
   function loadSheet(date, siteId) {
-    if (!state.sites.some((x) => x.id === siteId)) siteId = '';
+    if (!entrySites().some((x) => x.id === siteId)) siteId = '';
     const rows = siteId ? Core.dayEntries(state, date, siteId).map(makeRow) : [];
     sheet = { date, siteId, rows: rows.length ? rows : [newRowLike(null)], dirty: false };
     form.elements.date.value = date;
@@ -324,9 +348,22 @@
     return askConfirm('保存していない変更があります。破棄して移動しますか？', { ok: '破棄する', danger: true });
   }
 
+  /** 入力画面で選べる現場（現場用は稼働中のみ、管理者は完工済みも表示・閲覧できる） */
+  function entrySites() {
+    return state.sites.filter((x) => role() === 'admin' || x.status !== 'done');
+  }
+
+  /** 既定の現場: 入力者が最後に入力した現場 → この端末で最後に使った現場 → 1 件だけならそれ */
   function defaultSiteId() {
-    if (state.sites.some((x) => x.id === state.settings.lastSiteId)) return state.settings.lastSiteId;
-    return state.sites.length === 1 ? state.sites[0].id : '';
+    const allowed = new Set(entrySites().map((x) => x.id));
+    const emp = state.settings.lastEmployeeId;
+    if (emp) {
+      const last = state.entries.filter((e) => e.inputBy === emp && allowed.has(e.siteId))
+        .sort((a, b) => b.date.localeCompare(a.date) || (b.createdAt || 0) - (a.createdAt || 0))[0];
+      if (last) return last.siteId;
+    }
+    if (allowed.has(state.settings.lastSiteId)) return state.settings.lastSiteId;
+    return allowed.size === 1 ? [...allowed][0] : '';
   }
 
   function openToday() {
@@ -343,7 +380,7 @@
     const catOptions = '<option value="">大分類を選択</option>' + state.categories.map((c) =>
       `<option value="${escapeHtml(c.id)}" ${c.id === r.categoryId ? 'selected' : ''}>${escapeHtml(c.name)}</option>`).join('');
     const id = (f) => `${r.key}-${f}`;
-    const hasDetail = r.worker || r.note;
+    const hasDetail = !!r.note;
     return `<div class="work-row" data-key="${r.key}">
       <div class="work-row-head">
         <span class="work-no">作業 ${i + 1}</span>
@@ -367,10 +404,9 @@
         <div class="row-calc" data-mh>${rowCalcText(r)}</div>
       </div>
       <details class="work-more" ${hasDetail ? 'open' : ''}>
-        <summary>作業者・備考${hasDetail ? '' : ' <span class="muted">（任意）</span>'}</summary>
+        <summary>備考${hasDetail ? '' : ' <span class="muted">（任意）</span>'}</summary>
         <div class="work-more-body">
-          <input id="${id('worker')}" data-f="worker" type="text" list="worker-list" autocomplete="off" value="${escapeHtml(r.worker)}" placeholder="作業者・業者" aria-label="作業 ${i + 1} の作業者・業者">
-          <input id="${id('note')}" data-f="note" type="text" value="${escapeHtml(r.note)}" placeholder="備考（場所・内容など）" aria-label="作業 ${i + 1} の備考">
+          <input id="${id('note')}" data-f="note" type="text" value="${escapeHtml(r.note)}" placeholder="場所・内容など" aria-label="作業 ${i + 1} の備考">
         </div>
       </details>
     </div>`;
@@ -378,6 +414,11 @@
 
   function renderSheet() {
     $('#sheet-rows').innerHTML = sheet.rows.map(rowHtml).join('');
+    const site = state.sites.find((x) => x.id === sheet.siteId);
+    const done = !!site && site.status === 'done';
+    $('#sheet-fields').disabled = done;
+    $('#sheet-lock').hidden = !done;
+    if (done) $('#sheet-lock').textContent = `この現場は完工済みです（完工日 ${site.completedOn ? formatDate(site.completedOn) : '未設定'}）。表示のみで、入力・修正はできません。`;
     renderDaySites();
     updateSheetTotal();
   }
@@ -387,7 +428,7 @@
     const total = Core.round2(filled.reduce((s, r) => s + rowManHours(r), 0));
     $('#sheet-total').innerHTML = `<strong>${fmt(total)} h</strong>（${fmt(Core.round2(total / perDay()))} 人工）・${filled.length} 作業` +
       (sheet.dirty ? ' <span class="unsaved">未保存</span>' : '');
-    $('#save-sheet').disabled = !sheet.dirty;
+    $('#save-sheet').disabled = !sheet.dirty || Core.isSiteDone(state, sheet.siteId);
   }
 
   /** 同じ日に記録のある現場（切り替え用） */
@@ -395,7 +436,8 @@
     const byDay = state.entries.filter((e) => e.date === sheet.date);
     const totals = new Map();
     for (const e of byDay) totals.set(e.siteId, (totals.get(e.siteId) || 0) + Core.entryManHours(e));
-    const sites = state.sites.filter((x) => totals.has(x.id) && x.id !== sheet.siteId);
+    const allowed = new Set(entrySites().map((x) => x.id));
+    const sites = state.sites.filter((x) => totals.has(x.id) && x.id !== sheet.siteId && allowed.has(x.id));
     $('#day-sites').innerHTML = sites.length
       ? `<span class="muted small">${formatDate(sheet.date)} の他の現場:</span> ` + sites.map((x) =>
         `<button type="button" class="chip" data-goto-site="${escapeHtml(x.id)}">${escapeHtml(x.name)} ${fmt(Core.round2(totals.get(x.id)))}h</button>`).join('')
@@ -534,6 +576,14 @@
     toast(`${formatDate(prev.date)} の作業を呼び出しました。数量を入れて保存してください`);
   });
 
+  form.elements.inputBy.addEventListener('change', (ev) => {
+    // 入力者はこの端末で覚えておく（次回から選び直さなくてよい）
+    state.settings.lastEmployeeId = ev.target.value;
+    save();
+    if (!sheet.dirty && !sheet.siteId) loadSheet(sheet.date, defaultSiteId());
+    $('#form-errors').innerHTML = '';
+  });
+
   form.elements.date.addEventListener('change', async (ev) => {
     if (!await confirmDiscard()) { ev.target.value = sheet.date; return; }
     loadSheet(ev.target.value, sheet.siteId);
@@ -552,7 +602,10 @@
 
   form.addEventListener('submit', (ev) => {
     ev.preventDefault();
-    const res = Core.saveDaySheet(state, sheet.date, sheet.siteId, sheet.rows);
+    const res = Core.saveDaySheet(state, sheet.date, sheet.siteId, sheet.rows, Date.now(), {
+      inputBy: form.elements.inputBy.value,
+      requireInputBy: state.employees.length > 0,
+    });
     $('#form-errors').innerHTML = res.errors.map((e) => `<li>${escapeHtml(e)}</li>`).join('');
     if (res.errors.length) {
       $('#form-errors').scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -627,7 +680,7 @@
       return `<li class="card">
         <div class="card-main">
           <div class="card-title"><span class="tag-cat">${escapeHtml(names.categoryOfWorkType(e.workTypeId))} ›</span><span class="tag">${escapeHtml(names.workType(e.workTypeId))}</span> ${escapeHtml(names.site(e.siteId))}</div>
-          <div class="card-sub">${formatDate(e.date)} ${escapeHtml(e.worker || '')} ${e.people}人 × ${fmt(e.hours)}h ${escapeHtml(time)}</div>
+          <div class="card-sub">${formatDate(e.date)} ${e.people}人 × ${fmt(e.hours)}h ${escapeHtml(time)}${e.inputBy ? `・入力 ${escapeHtml(names.employee(e.inputBy))}` : ''}</div>
           ${Core.isBlank(e.quantity) ? '' : `<div class="card-sub">数量 <strong>${fmt(e.quantity)} ${escapeHtml(unitOf(e.workTypeId))}</strong></div>`}
           ${e.note ? `<div class="card-note">${escapeHtml(e.note)}</div>` : ''}
         </div>
@@ -679,7 +732,169 @@
     renderList();
   }));
 
+  // ---------- 累計（現場ごと・任意の時点／完工時） ----------
+  function formatDateLong(iso) {
+    if (!iso) return '—';
+    const [y, m, d] = iso.split('-').map(Number);
+    return `${y}/${m}/${d}`;
+  }
+
+  function lastDayOfPrevMonth() {
+    const now = new Date();
+    return toISODate(new Date(now.getFullYear(), now.getMonth(), 0));
+  }
+
+  /** 完工済みなら完工日、稼働中なら今日 */
+  function defaultAsOf(site) {
+    return site && site.status === 'done' && site.completedOn ? site.completedOn : toISODate(new Date());
+  }
+
+  let cumulSiteId = '';
+
+  function renderCumul() {
+    const sel = $('#c-site');
+    if (!sel.value) sel.value = sheet.siteId || defaultSiteId() || (state.sites[0] || {}).id || '';
+    const site = state.sites.find((x) => x.id === sel.value);
+    const clear = (msg) => {
+      $('#c-status').textContent = msg;
+      $('#c-totals').innerHTML = '';
+      $('#c-table').innerHTML = '';
+    };
+    if (!site) { clear('現場がありません'); return; }
+    // 現場を切り替えたら時点を既定値（完工日または今日）に戻す
+    if (cumulSiteId !== site.id || !$('#c-asof').value) {
+      $('#c-asof').value = defaultAsOf(site);
+      cumulSiteId = site.id;
+    }
+    const asOf = $('#c-asof').value;
+    const done = site.status === 'done';
+    $('#c-quick [data-asof=done]').disabled = !done;
+    const range = Core.siteDateRange(state, site.id);
+    const entries = state.entries.filter((e) => e.siteId === site.id && e.date <= asOf);
+
+    const final = done && asOf === site.completedOn;
+    $('#c-status').innerHTML = `${done ? `<span class="pill done">完工 ${escapeHtml(formatDateLong(site.completedOn))}</span>` : '<span class="pill active">稼働中</span>'}
+      ${final ? '<strong>完工時の累計（確定）</strong>' : `<strong>${escapeHtml(formatDateLong(asOf))} 時点の累計</strong>`}
+      <span class="muted">（初回記録 ${escapeHtml(formatDateLong(range.first))}〜）</span>`;
+    if (!entries.length) {
+      $('#c-totals').innerHTML = '';
+      $('#c-table').innerHTML = '<p class="muted">この時点までの記録はありません</p>';
+      return;
+    }
+
+    const total = Core.round2(entries.reduce((s2, e) => s2 + Core.entryManHours(e), 0));
+    $('#c-totals').innerHTML = `
+      <div class="stat"><span>延べ工数</span><strong>${fmt(total)}<small> h</small></strong></div>
+      <div class="stat"><span>人工</span><strong>${fmt(Core.round2(total / perDay()))}</strong></div>
+      <div class="stat"><span>稼働日数</span><strong>${new Set(entries.map((e) => e.date)).size}<small> 日</small></strong></div>
+      <div class="stat"><span>工種数</span><strong>${new Set(entries.map((e) => e.workTypeId)).size}</strong></div>`;
+
+    // 管理者はマスタとの比較も表示する（比較するマスタは「集計」で選んだもの）
+    const compareIds = role() === 'admin' ? state.settings.compareMasterIds : [];
+    const rows = Core.compareStandards(
+      Core.productivity(entries, state.workTypes, perDay(), { bySite: true, categories: state.categories }),
+      state, compareIds);
+    const names = Core.nameLookup(state);
+    const masterName = new Map(compareOptions().map((o) => [o.id, o.name]));
+    const dash = '<span class="muted">—</span>';
+    const stdCell = (st) => {
+      if (st.rate === null) return dash;
+      const ratio = st.ratio === null ? '' : `<div class="${st.ratio > 100 ? 'over' : 'under'}">${fmt(st.ratio)}%</div>`;
+      return `<div>${fmt(st.rate, 3)}</div>${ratio}`;
+    };
+    // 大分類ごとに小計行を入れる
+    let html = '';
+    let currentCat = null;
+    const catTotals = new Map();
+    for (const r of rows) catTotals.set(r.categoryId, Core.round2((catTotals.get(r.categoryId) || 0) + r.manDays));
+    for (const r of rows) {
+      if (r.categoryId !== currentCat) {
+        currentCat = r.categoryId;
+        html += `<tr class="cat-row"><th>${escapeHtml(names.category(r.categoryId))}</th>
+          <td></td><td class="num">${fmt(catTotals.get(r.categoryId))}</td><td colspan="${3 + compareIds.length}"></td></tr>`;
+      }
+      const unit = escapeHtml(r.unit);
+      html += `<tr>
+        <td class="wt-cell">${escapeHtml(names.workType(r.workTypeId))}</td>
+        <td class="num">${r.quantity > 0 ? `${fmt(r.quantity)} ${unit}` : '<span class="muted">未入力</span>'}</td>
+        <td class="num">${fmt(r.manDays)}</td>
+        <td class="num rate-val">${r.rate === null ? dash : `${fmt(r.rate, 3)}<br><small>人工/${unit || '単位'}</small>`}</td>
+        ${compareIds.map((id) => `<td class="num std-cell">${stdCell(r.standards[id])}</td>`).join('')}
+        <td class="num">${r.output === null ? dash : `${fmt(r.output)} ${unit}`}</td>
+        <td class="num">${r.days}日</td>
+      </tr>`;
+    }
+    $('#c-table').innerHTML = `<table class="rates cumul">
+      <thead><tr>
+        <th>工種</th><th class="num">数量</th><th class="num">人工</th>
+        <th class="num">実績歩掛り<br><small>人工/単位</small></th>
+        ${compareIds.map((id) => `<th class="num std-head">${escapeHtml(masterName.get(id) || '')}<br><small>歩掛り / 対比</small></th>`).join('')}
+        <th class="num">1人工あたり<br><small>施工量</small></th>
+        <th class="num">稼働日</th>
+      </tr></thead>
+      <tbody>${html}</tbody>
+      <tfoot><tr><th>合計</th><td></td><td class="num">${fmt(Core.round2(total / perDay()))}</td><td colspan="${3 + compareIds.length}"></td></tr></tfoot>
+    </table>`;
+  }
+
+  $('#c-site').addEventListener('change', renderCumul);
+  $('#c-asof').addEventListener('change', renderCumul);
+  $('#c-quick').addEventListener('click', (ev) => {
+    const b = ev.target.closest('button[data-asof]');
+    if (!b) return;
+    const site = state.sites.find((x) => x.id === $('#c-site').value);
+    const kind = b.dataset.asof;
+    $('#c-asof').value = kind === 'lastmonth' ? lastDayOfPrevMonth()
+      : kind === 'done' && site && site.completedOn ? site.completedOn
+        : toISODate(new Date());
+    renderCumul();
+  });
+
   // ---------- 集計 ----------
+  let monthUnit = 'md'; // md: 人工 / h: 時間
+
+  /** 月 × 工種（大分類ごとに小計）。期間・現場・大分類の絞り込みに従う */
+  function renderMonthly(entries) {
+    const m = Core.monthlyMatrix(entries, (e) => e.workTypeId);
+    if (!m.months.length) {
+      $('#summary-monthly').innerHTML = '<p class="muted">データがありません</p>';
+      return;
+    }
+    const names = Core.nameLookup(state);
+    const conv = (h) => (monthUnit === 'md' ? Core.round2(h / perDay()) : h);
+    const cell = (h, cls = '') => `<td class="num ${cls}">${h ? fmt(conv(h)) : ''}</td>`;
+    const monthLabel = (ym) => { const [y, mo] = ym.split('-'); return `${y}/${Number(mo)}`; };
+    // 大分類・小分類の登録順（未登録の工種は最後）
+    const wtOrder = state.workTypes.filter((w) => m.rows.has(w.id));
+    const unknown = [...m.rows.keys()].filter((id) => !state.workTypes.some((w) => w.id === id));
+    const groups = state.categories.map((c) => ({ name: c.name, ids: wtOrder.filter((w) => w.categoryId === c.id).map((w) => w.id) }))
+      .filter((g) => g.ids.length);
+    if (unknown.length) groups.push({ name: '(削除済み)', ids: unknown });
+    let body = '';
+    for (const g of groups) {
+      const sub = {};
+      let subTotal = 0;
+      for (const id of g.ids) {
+        for (const mo of m.months) sub[mo] = (sub[mo] || 0) + (m.rows.get(id)[mo] || 0);
+        subTotal += m.totals.get(id);
+      }
+      body += `<tr class="cat-row"><th>${escapeHtml(g.name)}</th>${m.months.map((mo) => cell(sub[mo])).join('')}${cell(subTotal, 'strong')}</tr>`;
+      body += g.ids.map((id) => `<tr><th class="wt-cell">${escapeHtml(names.workType(id))}</th>
+        ${m.months.map((mo) => cell(m.rows.get(id)[mo])).join('')}${cell(m.totals.get(id), 'strong')}</tr>`).join('');
+    }
+    $('#summary-monthly').innerHTML = `<table class="pivot monthly">
+      <thead><tr><th>工種（${monthUnit === 'md' ? '人工' : '時間 h'}）</th>${m.months.map((mo) => `<th class="num">${monthLabel(mo)}</th>`).join('')}<th class="num">合計</th></tr></thead>
+      <tbody>${body}</tbody>
+      <tfoot><tr><th>合計</th>${m.months.map((mo) => cell(m.monthTotals[mo])).join('')}${cell(m.total, 'strong')}</tr></tfoot>
+    </table>`;
+  }
+
+  $$('[data-month-unit]').forEach((b) => b.addEventListener('click', () => {
+    monthUnit = b.dataset.monthUnit;
+    $$('[data-month-unit]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+    renderSummary();
+  }));
+
   function barTable(rows, label) {
     if (!rows.length) return '<p class="muted">データがありません</p>';
     const max = Math.max(...rows.map((r) => r.manHours)) || 1;
@@ -708,6 +923,7 @@
       <div class="stat"><span>稼働日数</span><strong>${days}<small> 日</small></strong></div>
       <div class="stat"><span>記録件数</span><strong>${entries.length}<small> 件</small></strong></div>`;
 
+    renderMonthly(entries);
     renderRates(entries);
 
     const catKey = (e) => categoryOf(e.workTypeId);
@@ -843,6 +1059,7 @@
   // ---------- マスタ ----------
   function usageCount(key, id) {
     if (key === 'sites') return state.entries.filter((e) => e.siteId === id).length;
+    if (key === 'employees') return state.entries.filter((e) => e.inputBy === id).length;
     if (key === 'workTypes') return state.entries.filter((e) => e.workTypeId === id).length;
     if (key === 'categories') {
       const ids = new Set(Core.workTypesOfCategory(state, id).map((w) => w.id));
@@ -893,13 +1110,56 @@
     if (d.open) openGroups.add(d.dataset.cat); else openGroups.delete(d.dataset.cat);
   }, true);
 
+  /** 現場の行。作番・現場名は kintone 側の値なので表示のみ、状態・完工日・元請マスタを設定する */
+  function siteRow(x) {
+    const used = usageCount('sites', x.id);
+    const range = Core.siteDateRange(state, x.id);
+    const done = x.status === 'done';
+    const rid = (f) => `site-${x.id}-${f}`;
+    return `<li class="site-row ${done ? 'is-done' : ''}">
+      <div class="site-main">
+        <span class="master-name"><strong>${escapeHtml(x.code || '（作番なし）')}</strong> ${escapeHtml(x.name)}
+          ${done ? '<span class="pill done">完工</span>' : '<span class="pill active">稼働中</span>'}</span>
+        <span class="rm-meta">${used ? `記録 ${used} 件・${formatDate(range.first)}〜${formatDate(range.last)}` : '記録なし'}</span>
+      </div>
+      <div class="site-fields">
+        <label for="${rid('status')}">状態
+          <select id="${rid('status')}" data-site-field="status" data-id="${x.id}">
+            <option value="active" ${done ? '' : 'selected'}>稼働中</option>
+            <option value="done" ${done ? 'selected' : ''}>完工</option>
+          </select>
+        </label>
+        <label for="${rid('done')}">完工日
+          <input id="${rid('done')}" type="date" data-site-field="completedOn" data-id="${x.id}" value="${escapeHtml(x.completedOn || '')}" ${done ? '' : 'disabled'}>
+        </label>
+        <label for="${rid('master')}">元請の歩掛りマスタ
+          <select id="${rid('master')}" data-site-field="rateMasterId" data-id="${x.id}">
+            <option value="">未設定</option>
+            ${state.rateMasters.map((m) => `<option value="${escapeHtml(m.id)}" ${m.id === x.rateMasterId ? 'selected' : ''}>${escapeHtml(m.name)}</option>`).join('')}
+          </select>
+        </label>
+        <button type="button" data-master-act="del" data-key="sites" data-id="${x.id}" class="danger mock-only" title="モック用。本番では kintone の現場アプリで管理">削除</button>
+      </div>
+    </li>`;
+  }
+
+  function employeeRow(x) {
+    const used = usageCount('employees', x.id);
+    return `<li>
+      <span class="master-name"><strong>${escapeHtml(x.code || '')}</strong> ${escapeHtml(x.name)}${used ? ` <small class="muted">入力 ${used}件</small>` : ''}</span>
+      <span class="master-actions">
+        <button type="button" data-master-act="del" data-key="employees" data-id="${x.id}" class="danger mock-only" title="モック用。本番では kintone の社員アプリで管理">削除</button>
+      </span>
+    </li>`;
+  }
+
   function renderMaster() {
-    $('#master-sites').innerHTML = simpleList('sites', (x) => state.rateMasters.length ? `<span class="site-extra">
-        <select data-site-master="${escapeHtml(x.id)}" aria-label="元請の歩掛りマスタ">
-          <option value="">元請マスタ: 未設定</option>
-          ${state.rateMasters.map((m) => `<option value="${escapeHtml(m.id)}" ${m.id === x.rateMasterId ? 'selected' : ''}>元請マスタ: ${escapeHtml(m.name)}</option>`).join('')}
-        </select></span>` : '');
-    $('#master-workers').innerHTML = simpleList('workers');
+    // 稼働中を上に、それぞれ作番順
+    const sites = [...state.sites].sort((a, b) =>
+      (a.status === 'done') - (b.status === 'done') || String(a.code).localeCompare(String(b.code)));
+    $('#master-sites').innerHTML = sites.length ? sites.map(siteRow).join('') : '<li class="muted">未登録</li>';
+    $('#master-employees').innerHTML = state.employees.length
+      ? state.employees.map(employeeRow).join('') : '<li class="muted">未登録</li>';
     $('#master-categories').innerHTML = simpleList('categories',
       (c) => ` <small class="muted">小分類 ${Core.workTypesOfCategory(state, c.id).length}</small>`);
     $('#master-workTypes').innerHTML = state.categories.map((c) => {
@@ -931,6 +1191,16 @@
       });
       f.elements.name.value = '';
       f.elements.unit.value = '';
+    } else if (key === 'sites' || key === 'employees') {
+      // モック用の追加（本番では kintone の現場アプリ・社員アプリから取得する）
+      const code = f.elements.code.value.trim();
+      if (state[key].some((x) => x.code === code)) {
+        toast(`同じ${key === 'sites' ? '作番' : '管理番号'}がすでに登録されています`);
+        return;
+      }
+      const item = { id: Core.newId(), code, name };
+      state[key].push(key === 'sites' ? Core.normalizeSite(item) : item);
+      f.reset();
     } else {
       if (state[key].some((x) => x.name === name)) { toast('同じ名前がすでに登録されています'); return; }
       state[key].push({ id: Core.newId(), name });
@@ -992,13 +1262,26 @@
   });
 
   document.addEventListener('change', (ev) => {
-    const sel = ev.target.closest('select[data-site-master]');
-    if (!sel) return;
-    const site = state.sites.find((x) => x.id === sel.dataset.siteMaster);
+    const el = ev.target.closest('[data-site-field]');
+    if (!el) return;
+    const site = state.sites.find((x) => x.id === el.dataset.id);
     if (!site) return;
-    site.rateMasterId = sel.value;
+    const field = el.dataset.siteField;
+    if (field === 'status') {
+      site.status = el.value;
+      // 完工日の初期値は最後の記録日（なければ今日）
+      if (site.status === 'done' && !site.completedOn) {
+        site.completedOn = Core.siteDateRange(state, site.id).last || toISODate(new Date());
+      }
+      if (site.status === 'active') site.completedOn = '';
+    } else {
+      site[field] = el.value;
+    }
     save();
-    toast('保存しました');
+    render();
+    toast(field === 'status'
+      ? (site.status === 'done' ? `完工にしました（完工日 ${formatDate(site.completedOn)}）` : '稼働中に戻しました')
+      : '保存しました');
   });
 
   $('#merge-defaults').addEventListener('click', () => {
@@ -1233,14 +1516,15 @@
 
   // ---------- サンプルデータ ----------
   function loadSample() {
-    const { sites } = Core.addSampleData(state, toISODate(new Date()));
+    const { sites, employees } = Core.addSampleData(state, toISODate(new Date()));
     state.settings.lastSiteId = sites[0].id;
+    state.settings.lastEmployeeId = employees[0].id;
     save();
     openToday();
     setPeriod('all');
-    showTab('summary');
     $('#rate-by-site').checked = true;
-    renderSummary();
+    // 現場用は自分の現場の累計、管理者用は全体の集計を表示する
+    showTab(role() === 'admin' ? 'summary' : 'cumul');
     toast('サンプルデータを追加しました');
   }
 
@@ -1254,18 +1538,36 @@
   });
 
   // ---------- 描画 ----------
+  function siteOptionLabel(x) {
+    return Core.siteLabel(x) + (x.status === 'done' ? '（完工）' : '');
+  }
+
+  /** 現場の選択肢（作番 現場名）。稼働中を上に並べる */
+  function fillSiteSelect(select, sites, placeholder) {
+    const current = select.value;
+    const sorted = [...sites].sort((a, b) => (a.status === 'done') - (b.status === 'done') || String(a.code).localeCompare(String(b.code)));
+    select.innerHTML = (placeholder === null ? '' : `<option value="">${escapeHtml(placeholder)}</option>`) +
+      sorted.map((x) => `<option value="${escapeHtml(x.id)}">${escapeHtml(siteOptionLabel(x))}</option>`).join('');
+    if (sites.some((x) => x.id === current)) select.value = current;
+  }
+
   function renderSelects() {
-    fillSelect(form.elements.siteId, state.sites, { placeholder: state.sites.length ? '現場を選択' : '先に「設定」で現場を登録' });
+    const sites = entrySites();
+    fillSiteSelect(form.elements.siteId, sites, sites.length ? '現場を選択' : '現場がありません（管理者用 → 設定）');
     form.elements.siteId.value = sheet.siteId;
+    const emps = state.employees;
+    form.elements.inputBy.innerHTML = `<option value="">${emps.length ? '入力者を選択' : '社員が未登録です'}</option>` +
+      emps.map((x) => `<option value="${escapeHtml(x.id)}">${escapeHtml(`${x.code} ${x.name}`.trim())}</option>`).join('');
+    form.elements.inputBy.value = emps.some((x) => x.id === state.settings.lastEmployeeId) ? state.settings.lastEmployeeId : '';
+    fillSiteSelect($('#c-site'), state.sites, null);
     for (const root of [$('#list-filters'), $('#summary-filters')]) {
-      fillSelect($('[name=siteId]', root), state.sites, { placeholder: 'すべて' });
+      fillSiteSelect($('[name=siteId]', root), state.sites, 'すべて');
       const cat = $('[name=categoryId]', root);
       fillSelect(cat, state.categories, { placeholder: 'すべて' });
       const wt = $('[name=workTypeId]', root);
       if (wt) fillWorkTypeSelect(wt, cat.value, 'すべて');
     }
     fillSelect($('.wt-add [name=categoryId]'), state.categories, { placeholder: '大分類を選択' });
-    $('#worker-list').innerHTML = state.workers.map((w) => `<option value="${escapeHtml(w.name)}">`).join('');
   }
 
   function render() {
@@ -1278,12 +1580,14 @@
       else loadSheet(sheet.date || toISODate(new Date()), sheet.siteId || defaultSiteId());
     }
     else if (tab === 'list') renderList();
+    else if (tab === 'cumul') renderCumul();
     else if (tab === 'summary') renderSummary();
     else if (tab === 'rates') renderRateMasters();
     else if (tab === 'master') renderMaster();
   }
 
   // ---------- 起動 ----------
+  applyRole();
   renderSelects();
   openToday();
   setPeriod('month');
